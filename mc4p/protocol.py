@@ -278,6 +278,9 @@ class Packet(object):
         ))
         self._dirty = False
 
+    def _make_dirty(self):
+        self._dirty = True
+
     def __repr__(self):
         return "<%s Packet>" % self._name
 

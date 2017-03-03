@@ -14,10 +14,11 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import unicode_literals
 
-import logging
 import collections
-import struct
 import json
+import logging
+import struct
+import uuid
 
 from mc4p import util
 
@@ -33,56 +34,37 @@ class Field(object):
         Field._NEXT_ID += 1
 
     @classmethod
-    def parse(cls, data, packet):
+    def parse(cls, data, parent):
         return None
 
     @classmethod
-    def prepare(cls, data, packet):
+    def prepare(cls, data, parent):
         """Used to set stray length fields"""
         pass
 
     @classmethod
-    def emit(cls, value, message):
+    def emit(cls, value, parent):
         return b""
 
     def format(self, value):
         return str(value)
 
-    @classmethod
-    def _parse_subfield(cls, field, data, packet):
-        if isinstance(field, Field):
-            return field.parse(data, packet)
-        elif isinstance(field, basestring):
-            return getattr(packet, field)
-        elif isinstance(field, dict):
-            return collections.OrderedDict(
-                (key, cls._parse_subfield(subfield, data, packet))
-                for key, subfield in field.iteritems()
-            )
-        else:
-            raise NotImplementedError
-
-    @classmethod
-    def _emit_subfield(cls, field, value, packet):
-        if isinstance(field, Field):
-            return field.emit(value, packet)
-        elif isinstance(field, basestring):
-            return ""
-        elif isinstance(field, dict):
-            return "".join(
-                cls._emit_subfield(subfield, value[name], packet)
-                for name, subfield in field.iteritems()
-            )
-        else:
-            raise NotImplementedError
-
-    @classmethod
-    def _set_subfield(cls, field, value, packet):
-        if isinstance(field, basestring):
-            setattr(packet, field, value)
-
     def __str__(self):
         return self.__class__.__name__
+
+
+class Empty(Field):
+    @classmethod
+    def parse(cls, data, parent=None):
+        return None
+
+    @classmethod
+    def emit(cls, value, parent=None):
+        return b''
+
+    @classmethod
+    def format(cls, value):
+        return ''
 
 
 def simple_type_field(name, format):
@@ -91,11 +73,11 @@ def simple_type_field(name, format):
 
     class SimpleType(Field):
         @classmethod
-        def parse(cls, data, packet=None):
+        def parse(cls, data, parent=None):
             return struct.unpack(format, data.read_bytes(length).tobytes())[0]
 
         @classmethod
-        def emit(cls, value, packet=None):
+        def emit(cls, value, parent=None):
             return struct.pack(format, value)
 
     SimpleType.__name__ = name
@@ -117,17 +99,17 @@ UnsignedLong = simple_type_field(b"UnsignedLong", b"Q")
 
 class Bool(Field):
     @classmethod
-    def parse(cls, data, packet=None):
+    def parse(cls, data, parent=None):
         return struct.unpack(b"b", data.read_bytes(1).tobytes())[0] != 0
 
     @classmethod
-    def emit(cls, value, packet=None):
+    def emit(cls, value, parent=None):
         return struct.pack(b"b", 1 if value else 0)
 
 
 class VarInt(Field):
     @classmethod
-    def parse(cls, data, packet=None):
+    def parse(cls, data, parent=None):
         value = 0
         for i in range(5):
             # ord() is about 3x as fast as struct.unpack() for single bytes
@@ -138,7 +120,7 @@ class VarInt(Field):
         raise IOError("Encountered varint longer than 5 bytes")
 
     @classmethod
-    def emit(cls, value, packet=None):
+    def emit(cls, value, parent=None):
         return b"".join(
             struct.pack(
                 b">B",
@@ -150,12 +132,12 @@ class VarInt(Field):
 
 class String(Field):
     @classmethod
-    def parse(cls, data, packet=None):
+    def parse(cls, data, parent=None):
         return unicode(data.read_bytes(VarInt.parse(data)).tobytes(),
                        encoding="utf-8")
 
     @classmethod
-    def emit(cls, value, packet=None):
+    def emit(cls, value, parent=None):
         return VarInt.emit(len(value)) + value.encode("utf-8")
 
     def format(self, value):
@@ -164,12 +146,12 @@ class String(Field):
 
 class Json(Field):
     @classmethod
-    def parse(cls, data, packet=None):
-        return json.loads(String.parse(data, packet))
+    def parse(cls, data, parent=None):
+        return json.loads(String.parse(data, parent))
 
     @classmethod
-    def emit(cls, value, packet=None):
-        return String.emit(json.dumps(value), packet)
+    def emit(cls, value, parent=None):
+        return String.emit(json.dumps(value), parent)
 
 
 class Chat(Json):
@@ -178,9 +160,23 @@ class Chat(Json):
         return util.parse_chat(value)
 
 
+class UUID(Field):
+    @classmethod
+    def parse(cls, data, parent=None):
+        return uuid.UUID(bytes=data.read_bytes(16).tobytes())
+
+    @classmethod
+    def emit(cls, value, parent=None):
+        return value.bytes
+
+    @classmethod
+    def format(cls, value):
+        return str(value)
+
+
 class Position(Field):
     @classmethod
-    def parse(cls, data, packet=None):
+    def parse(cls, data, parent=None):
         value = struct.unpack(">Q", data.read_bytes(8).tobytes())[0]
 
         x = value >> 38
@@ -198,7 +194,7 @@ class Position(Field):
         return (x, y, z)
 
     @classmethod
-    def emit(cls, value, packet=None):
+    def emit(cls, value, parent=None):
         x, y, z = value
         value = ((x & 0x3ffffff) << 38) | ((y & 0xfff) << 26) | (z & 0x3ffffff)
         return struct.pack(">Q", value)[0]
@@ -211,21 +207,21 @@ class Position(Field):
 class Data(Field):
     def __init__(self, size=None):
         super(Data, self).__init__()
-        self.size = size
+        self._size = size
 
-    def parse(self, data, packet=None):
-        if self.size is None:
+    def parse(self, data, parent=None):
+        if self._size is None:
             length = None
         else:
-            length = self._parse_subfield(self.size, data, packet)
+            length = self._size.parse(data, parent)
         return data.read_bytes(length)
 
-    def emit(self, value, packet=None):
-        if self.size is None:
+    def emit(self, value, parent=None):
+        if self._size is None:
             return value
         else:
             return util.CombinedMemoryView(
-                self._emit_subfield(self.size, len(value), packet),
+                self._size.emit(len(value), parent),
                 value
             )
 
@@ -235,6 +231,146 @@ class Data(Field):
         if len(value) < 100:
             if hasattr(value, "tobytes"):
                 value = value.tobytes()
-            return "<Data: %s" % " ".join("%02x" % ord(c) for c in value)
+            return "<Data: %s>" % " ".join("%02x" % ord(c) for c in value)
         else:
             return "<Data: %d bytes>" % len(value)
+
+
+class _SubStructure(object):
+    def __init__(self, parent, type):
+        self._parent = parent
+        self._type = type
+        self._is_ready = False
+
+    def _ready(self):
+        self._is_ready = True
+
+    def _make_dirty(self):
+        if self._parent is not None and self._is_ready:
+            self._parent._make_dirty()
+
+    def __setattr__(self, attr, value):
+        super(_SubStructure, self).__setattr__(attr, value)
+        if attr[0] != "_":
+            self._make_dirty()
+
+    def __setitem__(self, key, value):
+        super(_SubStructure, self).__setitem__(key, value)
+        self._make_dirty()
+
+
+class _Array(_SubStructure, list):
+    def __init__(self, size, parent, type):
+        _SubStructure.__init__(self, parent, type)
+        list.__init__(self)
+        self._size = size
+
+
+class Array(Field):
+    def __init__(self, size, item):
+        super(Array, self).__init__()
+        self._size = size
+        self._item = item
+
+    def parse(self, data, parent=None):
+        size = self._size.parse(data, parent)
+        arr = _Array(size, parent, self)
+        for i in range(size):
+            arr.append(self._item.parse(data, arr))
+        arr._ready()
+        return arr
+
+    def emit(self, value, parent=None):
+        return util.CombinedMemoryView(
+            self._size.emit(len(value), parent),
+            *(self._item.emit(val, value) for val in value)
+        )
+
+    def format(self, value):
+        if value is None:
+            return "None"
+        if len(value) < 10:
+            return "<Array: %s>" % ", ".join(
+                self._item.format(val) for val in value)
+        else:
+            return "<Array: %d items>" % len(value)
+
+
+class _SubFields(_SubStructure):
+    pass
+
+
+class SubFields(Field):
+    def __init__(self, **kwargs):
+        super(SubFields, self).__init__()
+        self.subfields = collections.OrderedDict(sorted(
+            ((name, field) for name, field in kwargs.iteritems()),
+            key=lambda i: i[1]._order_id
+        ))
+
+    def new_dummy(self, parent):
+        subfields = _SubFields(parent, self)
+        for key, val in self.subfields.iteritems():
+            setattr(subfields, key, None)
+        subfields._ready()
+        return subfields
+
+    def parse(self, data, parent=None):
+        subfields = _SubFields(parent, self)
+        for key, val in self.subfields.iteritems():
+            setattr(subfields, key, val.parse(data, subfields))
+        subfields._ready()
+        return subfields
+
+    def emit(self, value, parent=None):
+        return util.CombinedMemoryView(
+            *(val.emit(getattr(value, key), value)
+              for key, val in self.subfields.iteritems())
+        )
+
+    def format(self, value):
+        if value is None:
+            return "None"
+        return "<SubFields: %s>" % ", ".join(
+            '{}: {}'.format(key, val.format(getattr(value, key)))
+            for key, val in self.subfields.iteritems())
+
+
+class Switch(Field):
+    def __init__(self, cond, valdict):
+        super(Switch, self).__init__()
+        self.cond = cond
+        self.valdict = valdict
+
+    def parse(self, data, parent=None):
+        return self.valdict[self.cond(parent)].parse(data, parent)
+
+    def emit(self, value, parent=None):
+        return self.valdict[self.cond(parent)].emit(value, parent)
+
+    def format(self, value):
+        if value is None:
+            return "None"
+        return "<Switch: %s>" % repr(value)
+
+
+class Optional(Field):
+    def __init__(self, cond, val):
+        super(Optional, self).__init__()
+        self.cond = cond
+        self.val = val
+
+    def parse(self, data, parent=None):
+        if self.cond(parent):
+            return self.val.parse(data, parent)
+        else:
+            return None
+
+    def emit(self, value, parent=None):
+        if self.cond(parent):
+            return self.val.emit(value, parent)
+        else:
+            return b''
+
+    def format(self, value):
+        return "<Optional: %s>" % repr(value)
