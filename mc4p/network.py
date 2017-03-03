@@ -233,7 +233,6 @@ class Endpoint(gevent.Greenlet):
             self._handle_disconnect()
 
     def send(self, packet):
-        #packet._show()
         self._last_packet_sent = packet
         data = self.output_stream.emit(packet)
         if isinstance(data, util.CombinedMemoryView):
@@ -265,10 +264,9 @@ class Endpoint(gevent.Greenlet):
         self.input_stream.added_bytes(read_bytes)
         try:
             for packet in self.input_stream.read_packets():
-                #packet._show()
                 self._last_packet_received = packet
-                if not self.handle_packet(packet):
-                    self._call_packet_handlers(packet)
+                if not self._call_packet_handlers(packet):
+                    self.handle_packet(packet)
                 gevent.sleep()
         except Exception as e:
             if not self.handle_packet_error(e):
@@ -387,82 +385,4 @@ class Client(Endpoint):
         self.send_handshake()
         self.send(self.output_protocol.login.LoginStart(
             name=self.authenticator.display_name
-        ))
-
-    @Endpoint.packet_handler(CLIENT_PROTOCOL.login.EncryptionRequest)
-    def handle_encryption_key_request(self, packet):
-        public_key = encryption.decode_public_key(packet.public_key.tobytes())
-        self.shared_secret = encryption.generate_shared_secret()
-
-        if self.authenticator is not None:
-            for i in range(1000):
-                try:
-                    self.authenticator.join_server(
-                        packet.server_id, self.shared_secret, public_key,
-                        wait=True
-                    )
-                except authentication.AuthenticationThrottledException as e:
-                    logger.debug("Waiting %s seconds before authenticating" %
-                                 e.delay)
-                    gevent.sleep(e.delay)
-                    continue
-                break
-            else:
-                raise e
-            self._waiting_for_join = True
-
-        self.input_stream.enable_encryption(self.shared_secret)
-        self.send(self.output_protocol.login.EncryptionResponse(
-            shared_secret=encryption.encrypt_shared_secret(
-                self.shared_secret, public_key
-            ),
-            verify_token=encryption.encrypt_shared_secret(
-                packet.verify_token.tobytes(), public_key
-            ),
-        ))
-        self.output_stream.enable_encryption(self.shared_secret)
-
-    @Endpoint.packet_handler(CLIENT_PROTOCOL.login.LoginSuccess)
-    def handle_login_success(self, packet):
-        if self._waiting_for_join:
-            self._waiting_for_join = False
-            self.authenticator.joined_server()
-
-    @Endpoint.packet_handler(CLIENT_PROTOCOL.login.Disconnect)
-    @Endpoint.packet_handler(CLIENT_PROTOCOL.play.Disconnect)
-    def handle_disconnect_packet(self, packet):
-        self._disconnect_reason = util.parse_chat(packet.reason)
-        self.close()
-
-    @Endpoint.packet_handler(CLIENT_PROTOCOL.play.PlayerAbilities)
-    def handle_player_abilities(self, packet):
-        self.send(self.output_protocol.play.PluginMessage(
-            channel="MC|Brand",
-            data=parsing.String.emit("mc4p")
-        ))
-
-    @Endpoint.packet_handler(CLIENT_PROTOCOL.play.PlayerPositionAndLook)
-    def handle_player_position_and_look(self, packet):
-        if not self._spawned:
-            self.send(self.output_protocol.play.PlayerPositionAndLook(
-                _ignore_extra_fields=True,
-                x=packet.x,
-                feet_y=packet.y + 1.62,
-                y=packet.y,
-                z=packet.z,
-                yaw=packet.yaw,
-                pitch=packet.pitch,
-                on_ground=True
-            ))
-
-            self.send(self.output_protocol.play.ClientStatus(
-                action_id=0
-            ))
-
-            self._spawned = True
-
-    @Endpoint.packet_handler(CLIENT_PROTOCOL.play.KeepAlive)
-    def handle_keep_alive(self, packet):
-        self.send(self.output_protocol.play.KeepAlive(
-            keep_alive_id=packet.keep_alive_id
         ))
