@@ -17,7 +17,6 @@ from __future__ import unicode_literals
 import traceback
 import logging
 import time
-import sys
 
 import gevent.server
 import gevent.socket
@@ -25,7 +24,6 @@ from gevent import event
 
 from mc4p import stream
 from mc4p import protocol
-from mc4p import parsing
 from mc4p import util
 from mc4p import encryption
 from mc4p import authentication
@@ -233,6 +231,7 @@ class Endpoint(gevent.Greenlet):
             self._handle_disconnect()
 
     def send(self, packet):
+        self.debug_send_packet(packet)
         self._last_packet_sent = packet
         data = self.output_stream.emit(packet)
         if isinstance(data, util.CombinedMemoryView):
@@ -264,13 +263,21 @@ class Endpoint(gevent.Greenlet):
         self.input_stream.added_bytes(read_bytes)
         try:
             for packet in self.input_stream.read_packets():
+                self.debug_recv_packet(packet)
                 self._last_packet_received = packet
                 if not self._call_packet_handlers(packet):
                     self.handle_packet(packet)
                 gevent.sleep()
         except Exception as e:
+            __import__('traceback').print_exc()
             if not self.handle_packet_error(e):
                 raise
+
+    def debug_send_packet(self, packet):
+        pass
+
+    def debug_recv_packet(self, packet):
+        pass
 
 
 class DisconnectException(Exception):
@@ -340,14 +347,7 @@ class Client(Endpoint):
         self._spawned = False
 
     def log(self, *message):
-        if self._log_file is not None:
-            message = "%.2f - %s\n" % (time.time() - self._start_time,
-                                       " ".join(map(unicode, message)))
-            try:
-                self._log_file.write(message.encode("utf8"))
-            except IOError as e:
-                print("Error while writing log message: %s (message: %s)" %
-                      (e, message), file=sys.stdout)
+        logging.info(" ".join(map(unicode, message)))
 
     def handle_disconnect(self):
         self.log("Disconnect: %s" % self._disconnect_reason)
@@ -357,13 +357,6 @@ class Client(Endpoint):
             self._log_file.close()
         except:
             pass
-
-    def handle_packet(self, packet):
-        self.log("<-", packet)
-
-    def send(self, packet):
-        self.log("->", packet)
-        super(Client, self).send(packet)
 
     def wait_for_packet(self, packets, timeout=60):
         self.log("Waiting for %s" % packets)
