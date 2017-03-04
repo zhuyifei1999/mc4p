@@ -15,7 +15,6 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import logging
-import collections
 import struct
 import zlib
 
@@ -72,7 +71,6 @@ class BufferedPacketInputStream(PacketStream):
         self.write_position = 0
         self.read_position = 0
         self.last_boundary = 0
-        self.buffer_views = collections.deque()
 
     def enable_encryption(self, shared_secret):
         super(BufferedPacketInputStream, self).enable_encryption(shared_secret)
@@ -97,12 +95,6 @@ class BufferedPacketInputStream(PacketStream):
     def added_bytes(self, n):
         """Move the write position forward by n bytes"""
         pos = self.write_position
-        while self.buffer_views:
-            head = self.buffer_views[0]
-            if 0 <= head.offset - pos < n:
-                self.buffer_views.popleft().expired = True
-            else:
-                break
 
         if self._cipher is not None:
             # TODO: There has to be a way to do this without copying the
@@ -166,7 +158,6 @@ class BufferedPacketInputStream(PacketStream):
         if n > self.bytes_available():
             raise self.partial_packet()
         view = BufferView(self.output_buffer, self.read_position, n)
-        self.buffer_views.append(view)
         self.read_position = (self.read_position + n) % BUFFER_SIZE
         self.last_boundary = self.read_position
         return view
@@ -208,8 +199,6 @@ class BufferView(protocol.PacketData):
         self.read_position = 0
 
     def read(self):
-        if self.expired:
-            raise IOError("The requested data is no longer available")
         limit = min(self.offset + self.length, BUFFER_SIZE)
         data = self.buffer[self.offset:limit]
         if self.offset + self.length > BUFFER_SIZE:
@@ -219,8 +208,6 @@ class BufferView(protocol.PacketData):
         return data
 
     def read_bytes(self, n=None):
-        if self.expired:
-            raise IOError("The requested data is no longer available")
         if n is None:
             n = self.length - self.read_position
         elif self.length < self.read_position + n:
