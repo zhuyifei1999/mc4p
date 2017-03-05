@@ -22,8 +22,14 @@ setuptools.setup(
     description="Minecraft protocol utilities",
     keywords="minecraft protocol proxy",
     url="https://github.com/sadimusi/mc4p",
-    install_requires=("gevent", "geventhttpclient", "certifi", "pycrypto"),
-    extras_require = {
+    install_requires=(
+        "gevent",
+        "geventhttpclient",
+        "certifi",
+        "pycrypto",
+        "dnspython"
+    ),
+    extras_require={
         'performance': ("pycrypto",),
         'formatting': ("blessings",)
     }
