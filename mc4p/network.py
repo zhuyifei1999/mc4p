@@ -257,17 +257,18 @@ class Endpoint(gevent.Greenlet):
         if not read_bytes:
             raise EOFError()
         self.input_stream.added_bytes(read_bytes)
-        try:
-            for packet in self.input_stream.read_packets():
+        for packet in self.input_stream.read_packets():
+            try:
                 self.debug_recv_packet(packet)
                 self._last_packet_received = packet
                 if not self._call_packet_handlers(packet):
                     self.handle_packet(packet)
                 gevent.sleep()
-        except Exception as e:
-            __import__('traceback').print_exc()
-            if not self.handle_packet_error(e):
-                raise
+            except Exception as e:
+                self.logger.exception(
+                    'Exception occured while handling packet {}'.format(packet))
+                if not self.handle_packet_error(e):
+                    raise
 
     def debug_send_packet(self, packet):
         pass
