@@ -11,8 +11,8 @@
 
 from __future__ import absolute_import, unicode_literals
 
+import collections
 import errno
-import traceback
 import logging
 
 import gevent.server
@@ -22,7 +22,6 @@ from gevent import event
 from mc4p import stream
 from mc4p import protocol
 from mc4p import util
-from mc4p import authentication
 from mc4p import dns
 
 
@@ -31,20 +30,21 @@ CLIENT_PROTOCOL = REFERENCE_PROTOCOL.client_bound
 SERVER_PROTOCOL = REFERENCE_PROTOCOL.server_bound
 
 
+def _packet_handler_key(packet):
+    return (packet._state, packet._name)
+
+
 class _MetaEndpoint(type):
     def __init__(cls, name, bases, nmspc):
         super(_MetaEndpoint, cls).__init__(name, bases, nmspc)
 
-        if hasattr(cls, "class_packet_handlers"):
-            handlers = cls._copy_packet_handlers(cls.class_packet_handlers)
-        else:
-            handlers = {}
+        handlers = collections.defaultdict(set)
 
-        for f in cls.__dict__.itervalues():
+        for fname, f in cls.__dict__.iteritems():
             if callable(f) and hasattr(f, "_handled_packets"):
-                while f._handled_packets:
-                    key = cls._packet_handler_key(f._handled_packets.pop())
-                    handlers.setdefault(key, []).append(f)
+                for packets in f._handled_packets:
+                    key = _packet_handler_key(packets)
+                    handlers[key].add(fname)
 
         cls.class_packet_handlers = handlers
 
@@ -82,25 +82,15 @@ class Endpoint(gevent.Greenlet):
         )
 
         self.input_stream.pair(self.output_stream)
-        self.instance_packet_handlers = self._copy_packet_handlers(
-            self.class_packet_handlers, bind_to=self
-        )
+        self.instance_packet_handlers = {
+            k: [getattr(self, f) for f in v]
+            for k, v in self.class_packet_handlers.iteritems()
+        }
 
         self.disconnect_handlers = []
         self._disconnect_reason = None
-        self._last_packet_sent = None
-        self._last_packet_received = None
         self.connected = True
         self.init()
-
-    @classmethod
-    def _copy_packet_handlers(cls, handlers, bind_to=None):
-        return dict(
-            (k, [
-                f.__get__(bind_to, cls) if bind_to is not None else f
-                for f in v
-            ]) for k, v in handlers.iteritems()
-        )
 
     @property
     def input_protocol(self):
@@ -135,7 +125,7 @@ class Endpoint(gevent.Greenlet):
         return False
 
     def _call_packet_handlers(self, packet):
-        key = self._packet_handler_key(packet)
+        key = _packet_handler_key(packet)
         handlers = self.instance_packet_handlers.get(key)
         if handlers:
             # handlers might unregister themselves, so we need to copy the list
@@ -150,11 +140,11 @@ class Endpoint(gevent.Greenlet):
         return packet_handler_wrapper
 
     def register_packet_handler(self, packet, f):
-        key = self._packet_handler_key(packet)
+        key = _packet_handler_key(packet)
         self.instance_packet_handlers.setdefault(key, []).append(f)
 
     def unregister_packet_handler(self, packet, f):
-        key = self._packet_handler_key(packet)
+        key = _packet_handler_key(packet)
         self.instance_packet_handlers[key].remove(f)
 
     def wait_for_packet(self, packets, timeout=None):
@@ -170,13 +160,8 @@ class Endpoint(gevent.Greenlet):
             if packet_:
                 result.set(packet_)
             else:
-                if self._disconnect_reason == "Failed to verify username!":
-                    exc = authentication.AuthenticationException(
-                        self._disconnect_reason
-                    )
-                else:
-                    exc = DisconnectException(self._disconnect_reason)
-                result.set_exception(exc)
+                result.set_exception(
+                    DisconnectException(self._disconnect_reason))
 
         for packet in packets:
             self.register_packet_handler(packet, async_result_packet_handler)
@@ -205,17 +190,6 @@ class Endpoint(gevent.Greenlet):
 
         return packets_received
 
-    def wait_for_world_load(self):
-        packets = [self.input_protocol.play.ChunkData]
-        if hasattr(self.input_protocol.play, "MapChunkBulk"):
-            packets.append(self.input_protocol.play.MapChunkBulk)
-
-        self.wait_for_multiple(packets, timeout=1)
-
-    @staticmethod
-    def _packet_handler_key(packet):
-        return (packet._state, packet._name)
-
     def handle_packet_error(self, error):
         return False
 
@@ -230,7 +204,6 @@ class Endpoint(gevent.Greenlet):
 
     def send(self, packet):
         self.debug_send_packet(packet)
-        self._last_packet_sent = packet
         data = self.output_stream.emit(packet)
 
         try:
@@ -263,7 +236,6 @@ class Endpoint(gevent.Greenlet):
         for packet in self.input_stream.read_packets():
             try:
                 self.debug_recv_packet(packet)
-                self._last_packet_received = packet
                 if not self._call_packet_handlers(packet):
                     self.handle_packet(packet)
                 gevent.sleep()
