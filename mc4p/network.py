@@ -11,6 +11,7 @@
 
 from __future__ import absolute_import, unicode_literals
 
+import errno
 import traceback
 import logging
 
@@ -87,7 +88,6 @@ class Endpoint(gevent.Greenlet):
 
         self.disconnect_handlers = []
         self._disconnect_reason = None
-        self._disconnect_exception = None
         self._last_packet_sent = None
         self._last_packet_received = None
         self.connected = True
@@ -219,10 +219,11 @@ class Endpoint(gevent.Greenlet):
     def handle_packet_error(self, error):
         return False
 
-    def close(self):
+    def close(self, reason=None):
         if self.connected:
             if self._disconnect_reason is None:
-                self._disconnect_reason = "Connection was closed from this end"
+                self._disconnect_reason = (
+                    reason or "Connection closed by us")
             self.connected = False
             self.sock.close()
             self._handle_disconnect()
@@ -231,27 +232,28 @@ class Endpoint(gevent.Greenlet):
         self.debug_send_packet(packet)
         self._last_packet_sent = packet
         data = self.output_stream.emit(packet)
-        if isinstance(data, util.CombinedMemoryView):
-            for part in data.data_parts:
-                self.sock.sendall(part)
-        else:
-            self.sock.sendall(data)
+
+        try:
+            if isinstance(data, util.CombinedMemoryView):
+                for part in data.data_parts:
+                    self.sock.sendall(part)
+            else:
+                self.sock.sendall(data)
+        except gevent.socket.error as e:
+            if e.errno == errno.EPIPE:
+                self.close(e.message)
 
     def _run(self):
         while self.connected:
             try:
                 self._recv()
             except EOFError:
-                self._disconnect_reason = "The connection was closed"
+                self.close("Connection closed")
                 break
             except Exception as e:
-                if not isinstance(e, gevent.socket.error) or e.errno != 9:
-                    self._disconnect_reason = e.message
-                    self._disconnect_exception = e
-                    self._disconnect_traceback = traceback.format_exc()
+                self.close(e.message)
                 break
             gevent.sleep()
-        self.close()
 
     def _recv(self):
         read_bytes = self.sock.recv_into(self.input_stream.write_buffer())
