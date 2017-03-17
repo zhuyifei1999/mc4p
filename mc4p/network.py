@@ -16,7 +16,6 @@ from __future__ import unicode_literals
 
 import traceback
 import logging
-import time
 
 import gevent.server
 import gevent.socket
@@ -25,12 +24,9 @@ from gevent import event
 from mc4p import stream
 from mc4p import protocol
 from mc4p import util
-from mc4p import encryption
 from mc4p import authentication
 from mc4p import dns
 
-
-logger = logging.getLogger("network")
 
 REFERENCE_PROTOCOL = protocol.get_latest_protocol()
 CLIENT_PROTOCOL = REFERENCE_PROTOCOL.client_bound
@@ -301,10 +297,11 @@ class Server(gevent.server.StreamServer):
     def __init__(self, addr, handler=ClientHandler):
         super(Server, self).__init__(addr)
         self.handler = handler
-        logger.info("Listening on %s:%d" % addr)
+        self.logger = logging.getLogger("network.server")
+        self.logger.info("Listening on %s:%d" % addr)
 
     def handle(self, sock, addr):
-        logger.info("Incoming connection from %s:%d" % addr)
+        self.logger.info("Incoming connection from %s:%d" % addr)
         handler = self.handler(sock, addr, self)
         handler.run()
 
@@ -312,31 +309,25 @@ class Server(gevent.server.StreamServer):
         try:
             super(Server, self).serve_forever()
         except gevent.socket.error, e:
-            logger.error(e)
+            self.logger.error(e)
 
 
 class Client(Endpoint):
-    def __init__(self, addr, version=None, logfile=None):
+    def __init__(self, addr, version=None):
         if version is None:
             version = protocol.MAX_PROTOCOL_VERSION
 
-        self._log_file = logfile
-        if isinstance(logfile, basestring):
-            self._log_file = open(logfile, "a")
+        self.logger = logging.getLogger("network.client")
 
-        self._start_time = time.time()
-        self.log("Start time: %s" % time.strftime("%X"))
-
-        self.log("Resolving hostname")
         self.original_addr = addr
         self.addr = dns.resolve(*addr)
 
         if self.addr is None:
             raise Exception("Could not resolve hostname")
 
-        self.log("Connecting")
+        self.logger.debug("Connecting")
         sock = gevent.socket.create_connection(self.addr)
-        self.log("Connected")
+        self.logger.info("Connected")
 
         super(Client, self).__init__(
             sock, protocol.Direction.client_bound, version
@@ -346,20 +337,13 @@ class Client(Endpoint):
         self._waiting_for_join = False
         self._spawned = False
 
-    def log(self, *message):
-        logging.info(" ".join(map(unicode, message)))
-
     def handle_disconnect(self):
-        self.log("Disconnect: %s" % self._disconnect_reason)
+        self.logger.info("Disconnect: %s" % self._disconnect_reason)
         if self._waiting_for_join:
             self.authenticator.joined_server()
-        try:
-            self._log_file.close()
-        except:
-            pass
 
     def wait_for_packet(self, packets, timeout=60):
-        self.log("Waiting for %s" % packets)
+        self.logger.info("Waiting for %s" % packets)
         return super(Client, self).wait_for_packet(packets, timeout)
 
     def send_handshake(self, next_state=protocol.State.login):
