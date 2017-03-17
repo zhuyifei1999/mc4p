@@ -9,10 +9,8 @@
 # To Public License, Version 2, as published by Sam Hocevar. See
 # http://www.wtfpl.net/txt/copying/ for more details
 
-from __future__ import division
-from __future__ import absolute_import
-from __future__ import print_function
-from __future__ import unicode_literals
+from __future__ import (
+    division, absolute_import, print_function, unicode_literals)
 
 import logging
 import struct

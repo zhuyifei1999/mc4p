@@ -9,10 +9,7 @@
 # To Public License, Version 2, as published by Sam Hocevar. See
 # http://www.wtfpl.net/txt/copying/ for more details
 
-from __future__ import division
-from __future__ import absolute_import
-from __future__ import print_function
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 import logging
 import re
@@ -307,9 +304,6 @@ class Packet(object):
     def __str__(self):
         return unicode(self).encode("utf8")
 
-    def _show(self):
-        print(self)
-
     @classmethod
     def _do_magic(cls, context):
         cls._state = context.state
@@ -378,9 +372,6 @@ class UnknownPacket(Packet):
                     (self.id, len(self._data)))
         else:
             return "Unknown Packet"
-
-    def _show(self):
-        print(self)
 
 
 _PROTOCOL_CACHE = {}

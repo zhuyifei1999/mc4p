@@ -9,6 +9,8 @@
 # To Public License, Version 2, as published by Sam Hocevar. See
 # http://www.wtfpl.net/txt/copying/ for more details
 
+from __future__ import absolute_import, print_function, unicode_literals
+
 from Crypto.PublicKey import RSA
 from Crypto import Random
 from Crypto.Cipher import AES, PKCS1_v1_5
@@ -65,5 +67,5 @@ if __name__ == "__main__":
     nonce = generate_challenge_token()
     encrypted = encrypt_shared_secret(nonce, pair)
     decrypted = decrypt_shared_secret(encrypted, pair)
-    print nonce
-    print decrypted
+    print(nonce)
+    print(decrypted)
