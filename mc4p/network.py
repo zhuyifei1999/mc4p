@@ -67,6 +67,8 @@ class Endpoint(gevent.Greenlet):
         super(Endpoint, self).__init__()
         self.sock = sock
 
+        self.logger = logging.getLogger("network.endpoint")
+
         self.packet_handler = self._instance_packet_handler
 
         self.input_direction = incoming_direction
@@ -120,7 +122,7 @@ class Endpoint(gevent.Greenlet):
         self.handle_disconnect()
 
     def handle_disconnect(self):
-        pass
+        self.logger.info("Disconnect: %s" % self._disconnect_reason)
 
     def disconnect_handler(self, f):
         self.register_disconnect_handler(f)
@@ -159,6 +161,8 @@ class Endpoint(gevent.Greenlet):
         self.instance_packet_handlers[key].remove(f)
 
     def wait_for_packet(self, packets, timeout=None):
+        self.logger.debug("Waiting for %s" % packets)
+
         result = event.AsyncResult()
 
         if not hasattr(packets, "__iter__"):
@@ -333,34 +337,3 @@ class Client(Endpoint):
         super(Client, self).__init__(
             sock, protocol.Direction.client_bound, version
         )
-
-        self.authenticator = None
-        self._waiting_for_join = False
-        self._spawned = False
-
-    def handle_disconnect(self):
-        self.logger.info("Disconnect: %s" % self._disconnect_reason)
-        if self._waiting_for_join:
-            self.authenticator.joined_server()
-
-    def wait_for_packet(self, packets, timeout=60):
-        self.logger.info("Waiting for %s" % packets)
-        return super(Client, self).wait_for_packet(packets, timeout)
-
-    def send_handshake(self, next_state=protocol.State.login):
-        self.send(self.output_protocol.handshake.Handshake(
-            version=self.output_protocol.protocol.version,
-            host=self.original_addr[0],
-            port=self.original_addr[1],
-            state=protocol.State.index(next_state)
-        ))
-
-    def login(self, authenticator=None):
-        if authenticator is None:
-            authenticator = authentication.TokenAuthenticator()
-        self.authenticator = authenticator.get()
-
-        self.send_handshake()
-        self.send(self.output_protocol.login.LoginStart(
-            name=self.authenticator.display_name
-        ))

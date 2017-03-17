@@ -34,7 +34,7 @@ class ProxyClientHandler(network.ClientHandler):
         self.real_server.start()
 
     def handle_disconnect(self):
-        logger.info("%s disconnected" % self)
+        super(ProxyClientHandler, self).handle_disconnect()
         self.real_server.close()
 
     def handle_packet(self, packet):
@@ -66,8 +66,8 @@ class ProxyClient(network.Client):
         return True
 
     def handle_disconnect(self):
-        logger.info("%s disconnected" % self)
-        self.real_client.close()
+        super(ProxyClient, self).handle_disconnect()
+        self.real_server.close()
 
     def __str__(self):
         return "Server %s:%d" % self.addr
