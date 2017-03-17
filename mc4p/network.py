@@ -25,11 +25,6 @@ from mc4p import util
 from mc4p import dns
 
 
-REFERENCE_PROTOCOL = protocol.get_latest_protocol()
-CLIENT_PROTOCOL = REFERENCE_PROTOCOL.client_bound
-SERVER_PROTOCOL = REFERENCE_PROTOCOL.server_bound
-
-
 def _packet_handler_key(packet):
     return (packet._state, packet._name)
 
@@ -38,7 +33,10 @@ class _MetaEndpoint(type):
     def __init__(cls, name, bases, nmspc):
         super(_MetaEndpoint, cls).__init__(name, bases, nmspc)
 
-        handlers = collections.defaultdict(set)
+        if hasattr(cls, 'class_packet_handlers'):
+            handlers = cls.class_packet_handlers.copy()
+        else:
+            handlers = collections.defaultdict(set)
 
         for fname, f in cls.__dict__.iteritems():
             if callable(f) and hasattr(f, "_handled_packets"):
@@ -48,7 +46,8 @@ class _MetaEndpoint(type):
 
         cls.class_packet_handlers = handlers
 
-    def packet_handler(cls, packet):
+    @staticmethod
+    def packet_handler(packet):
         def packet_handler_wrapper(f):
             if not hasattr(f, "_handled_packets"):
                 f._handled_packets = []
