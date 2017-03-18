@@ -107,6 +107,8 @@ class SkinsPlugin(
                 self.dbm[mapkey] = target.encode('utf-8')
 
             def async_load_skin():
+                self.command_status(
+                    conn.proxy, '!skin: Loading skin for %s' % target)
                 skinkey = self.dbmkey(conn.proxy.username)
                 self.dbm[skinkey] = json.dumps(load_skin(target))
                 self.command_success(

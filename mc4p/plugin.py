@@ -80,9 +80,16 @@ class DBMPlugin(Plugin):
 
 
 class CommandPlugin(Plugin):
-    def command_success(self, proxy, msg):
+    def command_status(self, proxy, msg):
         proxy.client.send(CLIENT_PROTOCOL.play.ChatMessage(
             message={'text': msg},
+            position=1
+        ))
+        return True
+
+    def command_success(self, proxy, msg):
+        proxy.client.send(CLIENT_PROTOCOL.play.ChatMessage(
+            message={'text': msg, 'color': 'green'},
             position=1
         ))
         return True
