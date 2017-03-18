@@ -15,6 +15,7 @@ import collections
 import errno
 import logging
 
+import gevent.lock
 import gevent.server
 import gevent.socket
 from gevent import event
@@ -87,6 +88,8 @@ class Endpoint(gevent.Greenlet):
             k: [getattr(self.__class__, f) for f in v]
             for k, v in self.class_packet_handlers.iteritems()
         }
+
+        self._send_lock = gevent.lock.BoundedSemaphore()
 
         self.disconnect_handlers = []
         self._disconnect_reason = None
@@ -204,24 +207,25 @@ class Endpoint(gevent.Greenlet):
             self._handle_disconnect()
 
     def send(self, packet):
-        self.debug_send_packet(packet)
+        with self._send_lock:
+            self.debug_send_packet(packet)
 
-        if packet._direction not in (None, self.output_direction):
-            self.logger.warn(
-                'Packet %s direction mismatch! Expected: %s Got: %s',
-                packet, self.output_direction, packet._direction)
+            if packet._direction not in (None, self.output_direction):
+                self.logger.warn(
+                    'Packet %s direction mismatch! Expected: %s Got: %s',
+                    packet, self.output_direction, packet._direction)
 
-        data = self.output_stream.emit(packet)
+            data = self.output_stream.emit(packet)
 
-        try:
-            if isinstance(data, util.CombinedMemoryView):
-                for part in data.data_parts:
-                    self.sock.sendall(part)
-            else:
-                self.sock.sendall(data)
-        except gevent.socket.error as e:
-            if e.errno == errno.EPIPE:
-                self.close(str(e))
+            try:
+                if isinstance(data, util.CombinedMemoryView):
+                    for part in data.data_parts:
+                        self.sock.sendall(part)
+                else:
+                    self.sock.sendall(data)
+            except gevent.socket.error as e:
+                if e.errno == errno.EPIPE:
+                    self.close(str(e))
 
     def _run(self):
         while self.connected:

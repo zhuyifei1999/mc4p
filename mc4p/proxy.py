@@ -14,7 +14,7 @@ from __future__ import absolute_import, unicode_literals
 import importlib
 import logging
 
-from mc4p import network
+from mc4p import network, rcon
 
 
 class Proxy(object):
@@ -23,13 +23,15 @@ class Proxy(object):
         self.client = client
         self.server = server
         self.plugins = self.proxyserver.plugins
+        self.rcon = self.proxyserver.rcon
 
 
 class ProxyServer(network.Server):
-    def __init__(self, addr, remote_addr, plugins=()):
+    def __init__(self, addr, remote_addr, plugins=(), rcon=None):
         super(ProxyServer, self).__init__(addr, ProxyClientHandler)
         self.remote_addr = remote_addr
         self.plugins = plugins
+        self.rcon = rcon
 
         for plugin in self.plugins:
             plugin.on_enable(self)
@@ -112,6 +114,10 @@ if __name__ == "__main__":
     parser.add_argument('remote_port',
                         help='port the proxy server should connect to',
                         type=int)
+    parser.add_argument('--rcon',
+                        help='Rcon connection to the server',
+                        nargs=2,
+                        metavar=('port', 'password'))
     parser.add_argument('-v', '--verbose',
                         help='verbose mode',
                         action='store_true')
@@ -119,13 +125,20 @@ if __name__ == "__main__":
                         help='name of plugin to load, appended args will be '
                              'passed to the plugin',
                         action='append',
-                        nargs='+')
+                        nargs='+',
+                        metavar=('name', 'parameters'))
     args = parser.parse_args()
 
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+    if args.rcon:
+        rcon_port, rcon_password = args.rcon
+        server_rcon = rcon.Rcon(('localhost', int(rcon_port)), rcon_password)
+    else:
+        server_rcon = None
 
     plugins = []
 
@@ -135,5 +148,5 @@ if __name__ == "__main__":
         plugins.append(module.load_plugin(*pargs))
 
     server = ProxyServer(
-        ('', args.port), ('localhost', args.remote_port), plugins)
+        ('', args.port), ('localhost', args.remote_port), plugins, server_rcon)
     server.run()

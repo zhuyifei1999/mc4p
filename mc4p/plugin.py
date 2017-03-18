@@ -67,16 +67,19 @@ class RequireUsernamePlugin(Plugin):
         conn.proxy.username = packet.username
         return self.username_loaded(conn.proxy)
 
-    def username_loaded(self):
+    def username_loaded(self, proxy):
         pass
 
 
 class DBMPlugin(Plugin):
     def on_enable(self, server):
-        self.dbm = anydbm.open('dbm', 'c')
+        if not hasattr(self, 'dbm') or self.dbm is None:
+            self.dbm = anydbm.open('dbm', 'c')
 
     def on_disable(self, server):
-        self.dbm.close()
+        if self.dbm is not None:
+            self.dbm.close()
+            self.dbm = None
 
 
 class CommandPlugin(Plugin):
@@ -100,3 +103,14 @@ class CommandPlugin(Plugin):
             position=1
         ))
         return True
+
+
+class RconPlugin(Plugin):
+    def on_enable(self, server):
+        if server.rcon is None:
+            raise RuntimeError('Rcon required for plugin {}'.format(
+                self.__class__.__name__))
+        server.rcon.reconnect()
+
+    def execute_rcon(self, proxy, cmd):
+        return proxy.rcon.execute(cmd)
