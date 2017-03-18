@@ -114,7 +114,9 @@ class SkinsPlugin(
                 self.command_success(
                     conn.proxy, '!skin: Skin has been set to %s' % target)
 
-            threading.Thread(target=async_load_skin).start()
+            skinthread = threading.Thread(target=async_load_skin)
+            skinthread.daemon = True
+            skinthread.start()
             return True
 
 
