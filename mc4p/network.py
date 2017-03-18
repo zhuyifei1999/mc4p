@@ -14,6 +14,7 @@ from __future__ import absolute_import, unicode_literals
 import collections
 import errno
 import logging
+import threading
 
 import gevent.server
 import gevent.socket
@@ -39,10 +40,12 @@ class _MetaEndpoint(type):
             handlers = collections.defaultdict(set)
 
         for fname, f in cls.__dict__.iteritems():
-            if callable(f) and hasattr(f, "_handled_packets"):
-                for packets in f._handled_packets:
-                    key = _packet_handler_key(packets)
-                    handlers[key].add(fname)
+            if not (callable(f) and hasattr(f, "_handled_packets")):
+                continue
+
+            for packet in f._handled_packets:
+                key = _packet_handler_key(packet)
+                handlers[key].add(fname)
 
         cls.class_packet_handlers = handlers
 
@@ -82,9 +85,11 @@ class Endpoint(gevent.Greenlet):
 
         self.input_stream.pair(self.output_stream)
         self.instance_packet_handlers = {
-            k: [getattr(self, f) for f in v]
+            k: [getattr(self.__class__, f) for f in v]
             for k, v in self.class_packet_handlers.iteritems()
         }
+
+        self.send_lock = threading.Lock()
 
         self.disconnect_handlers = []
         self._disconnect_reason = None
@@ -129,7 +134,7 @@ class Endpoint(gevent.Greenlet):
         if handlers:
             # handlers might unregister themselves, so we need to copy the list
             for handler in tuple(handlers):
-                if handler(packet):
+                if handler(self, packet):
                     return True
 
     def _instance_packet_handler(self, packet):
@@ -155,7 +160,7 @@ class Endpoint(gevent.Greenlet):
             packets = (packets,)
 
         @self.disconnect_handler
-        def async_result_packet_handler(packet_=None):
+        def async_result_packet_handler(self_=None, packet_=None):
             if packet_:
                 result.set(packet_)
             else:
@@ -202,18 +207,28 @@ class Endpoint(gevent.Greenlet):
             self._handle_disconnect()
 
     def send(self, packet):
-        self.debug_send_packet(packet)
-        data = self.output_stream.emit(packet)
-
+        self.send_lock.acquire()
         try:
-            if isinstance(data, util.CombinedMemoryView):
-                for part in data.data_parts:
-                    self.sock.sendall(part)
-            else:
-                self.sock.sendall(data)
-        except gevent.socket.error as e:
-            if e.errno == errno.EPIPE:
-                self.close(e.message)
+            self.debug_send_packet(packet)
+
+            if packet._direction not in (None, self.output_direction):
+                self.logger.warn(
+                    'Packet %s direction mismatch! Expected: %s Got: %s',
+                    packet, self.output_direction, packet._direction)
+
+            data = self.output_stream.emit(packet)
+
+            try:
+                if isinstance(data, util.CombinedMemoryView):
+                    for part in data.data_parts:
+                        self.sock.sendall(part)
+                else:
+                    self.sock.sendall(data)
+            except gevent.socket.error as e:
+                if e.errno == errno.EPIPE:
+                    self.close(str(e))
+        finally:
+            self.send_lock.release()
 
     def _run(self):
         while self.connected:
@@ -223,7 +238,7 @@ class Endpoint(gevent.Greenlet):
                 self.close("Connection closed")
                 break
             except Exception as e:
-                self.close(e.message)
+                self.close(str(e))
                 break
             gevent.sleep()
 
@@ -276,7 +291,7 @@ class Server(gevent.server.StreamServer):
         self.logger.info("Listening on %s:%d" % addr)
 
     def handle(self, sock, addr):
-        self.logger.info("Incoming connection from %s:%d" % addr)
+        self.logger.info("Incoming connection from host %s port %d" % addr[:2])
         handler = self.handler(sock, addr, self)
         handler.run()
 

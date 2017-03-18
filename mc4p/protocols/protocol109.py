@@ -179,6 +179,53 @@ with protocol.client_bound.play:
         line_3 = Chat()
         line_4 = Chat()
 
+    class PlayerListItem(Packet):
+        id = 0x2d
+        action = VarInt()
+        players = Array(
+            VarInt(),
+            SubFields(
+                uuid=UUID(),
+                data=Switch(
+                    lambda parent: parent._parent._parent.action,
+                    {
+                        0: SubFields(  # add player
+                            name=String(),
+                            properties=Array(
+                                VarInt(),
+                                SubFields(
+                                    name=String(),
+                                    value=String(),
+                                    is_signed=Bool(),
+                                    signature=Optional(
+                                        lambda parent: parent.is_signed,
+                                        String()
+                                    ),
+                                )
+                            ),
+                            gamemode=VarInt(),
+                            ping=VarInt(),
+                            has_display_name=Bool(),
+                            display_name=Optional(
+                                lambda parent: parent.has_display_name,
+                                Chat()
+                            ),
+                        ),
+                        1: VarInt(),  # gamemode
+                        2: VarInt(),  # ping
+                        3: SubFields(  # display name
+                            has_display_name=Bool(),
+                            display_name=Optional(
+                                lambda parent: parent.has_display_name,
+                                Chat()
+                            ),
+                        ),
+                        4: Empty(),  # remove player
+                    }
+                )
+            )
+        )
+
 
 @protocol.packet_handler(protocol.server_bound.handshake.Handshake)
 def handle_handshake(packet, packet_stream):
