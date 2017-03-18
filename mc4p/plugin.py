@@ -13,7 +13,7 @@ from __future__ import absolute_import, unicode_literals
 
 import anydbm
 
-from mc4p import protocol, parsing
+from mc4p import protocol
 
 REFERENCE_PROTOCOL = protocol.get_latest_protocol()
 CLIENT_PROTOCOL = REFERENCE_PROTOCOL.client_bound

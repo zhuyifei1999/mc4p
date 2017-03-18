@@ -14,7 +14,6 @@ from __future__ import absolute_import, unicode_literals
 import collections
 import errno
 import logging
-import threading
 
 import gevent.server
 import gevent.socket
@@ -88,8 +87,6 @@ class Endpoint(gevent.Greenlet):
             k: [getattr(self.__class__, f) for f in v]
             for k, v in self.class_packet_handlers.iteritems()
         }
-
-        self.send_lock = threading.Lock()
 
         self.disconnect_handlers = []
         self._disconnect_reason = None
@@ -207,28 +204,24 @@ class Endpoint(gevent.Greenlet):
             self._handle_disconnect()
 
     def send(self, packet):
-        self.send_lock.acquire()
+        self.debug_send_packet(packet)
+
+        if packet._direction not in (None, self.output_direction):
+            self.logger.warn(
+                'Packet %s direction mismatch! Expected: %s Got: %s',
+                packet, self.output_direction, packet._direction)
+
+        data = self.output_stream.emit(packet)
+
         try:
-            self.debug_send_packet(packet)
-
-            if packet._direction not in (None, self.output_direction):
-                self.logger.warn(
-                    'Packet %s direction mismatch! Expected: %s Got: %s',
-                    packet, self.output_direction, packet._direction)
-
-            data = self.output_stream.emit(packet)
-
-            try:
-                if isinstance(data, util.CombinedMemoryView):
-                    for part in data.data_parts:
-                        self.sock.sendall(part)
-                else:
-                    self.sock.sendall(data)
-            except gevent.socket.error as e:
-                if e.errno == errno.EPIPE:
-                    self.close(str(e))
-        finally:
-            self.send_lock.release()
+            if isinstance(data, util.CombinedMemoryView):
+                for part in data.data_parts:
+                    self.sock.sendall(part)
+            else:
+                self.sock.sendall(data)
+        except gevent.socket.error as e:
+            if e.errno == errno.EPIPE:
+                self.close(str(e))
 
     def _run(self):
         while self.connected:
@@ -255,7 +248,7 @@ class Endpoint(gevent.Greenlet):
                 gevent.sleep()
             except Exception as e:
                 self.logger.exception(
-                    'Exception occured while handling packet {}'.format(packet))
+                    'Exception occured while handling packet %s' % packet)
                 if not self.handle_packet_error(e):
                     raise
 
