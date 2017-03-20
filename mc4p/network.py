@@ -13,6 +13,7 @@ from __future__ import absolute_import, unicode_literals
 
 import collections
 import errno
+import gc
 import logging
 
 import gevent.lock
@@ -289,8 +290,8 @@ class Server(gevent.server.StreamServer):
 
     def handle(self, sock, addr):
         self.logger.info("Incoming connection from host %s port %d" % addr[:2])
-        handler = self.handler(sock, addr, self)
-        handler.run()
+        self.handler(sock, addr, self).run()
+        self.logger.info("Garbage collected %d objects", gc.collect())
 
     def run(self):
         try:
