@@ -202,7 +202,7 @@ class BufferView(protocol.PacketData):
         if self.offset + self.length > BUFFER_SIZE:
             logger.debug("Rewinding buffer")
             limit = self.offset + self.length - BUFFER_SIZE
-            data = util.CombinedMemoryView(data, self.buffer[:limit])
+            data = util.combine_memoryview(data, self.buffer[:limit])
         return data
 
     def read_bytes(self, n=None):
@@ -213,7 +213,7 @@ class BufferView(protocol.PacketData):
         pos = self.read_position + self.offset
         data = self.buffer[pos:pos + n]
         if len(data) < n:
-            data = util.CombinedMemoryView(
+            data = util.combine_memoryview(
                 data, self.buffer[:pos + n - BUFFER_SIZE]
             )
         self.read_position += n
@@ -231,7 +231,7 @@ class CompressedData(protocol.PacketData):
         self.length = uncompressed_length
 
         self.read_position = 0
-        self.decompressed_data = util.CombinedMemoryView()
+        self.decompressed_data = b''
         self.decompress_object = zlib.decompressobj()
 
     def decompress(self, length):
@@ -247,13 +247,11 @@ class CompressedData(protocol.PacketData):
             if self.decompress_object.unconsumed_tail:
                 chunk = self.decompress_object.unconsumed_tail + chunk
 
-            self.decompressed_data.append(
-                self.decompress_object.decompress(chunk)
-            )
+            self.decompressed_data += self.decompress_object.decompress(chunk)
 
     def read(self):
         self.decompress(self.length - self.read_position)
-        return self.decompressed_data
+        return memoryview(self.decompressed_data)
 
     def read_bytes(self, n=None):
         if n is None:
@@ -263,7 +261,8 @@ class CompressedData(protocol.PacketData):
         self.decompress(n)
         original_position = self.read_position
         self.read_position += n
-        return self.decompressed_data[original_position:self.read_position]
+        return memoryview(self.decompressed_data)[
+            original_position:self.read_position]
 
     def read_compressed(self):
         return self.data.read()

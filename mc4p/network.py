@@ -218,11 +218,7 @@ class Endpoint(gevent.Greenlet):
             data = self.output_stream.emit(packet)
 
             try:
-                if isinstance(data, util.CombinedMemoryView):
-                    for part in data.data_parts:
-                        self.sock.sendall(part)
-                else:
-                    self.sock.sendall(data)
+                self.sock.sendall(data)
             except gevent.socket.error as e:
                 if e.errno == errno.EPIPE:
                     self.close(str(e))
@@ -235,6 +231,8 @@ class Endpoint(gevent.Greenlet):
                 self.close("Connection closed")
                 break
             except Exception as e:
+                if self.connected:
+                    self.logger.exception(e)
                 self.close(str(e))
                 break
             gevent.sleep()

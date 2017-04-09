@@ -71,7 +71,7 @@ def simple_type_field(name, format):
     class SimpleType(Field):
         @classmethod
         def parse(cls, data, parent=None):
-            return struct.unpack(format, data.read_bytes(length).tobytes())[0]
+            return struct.unpack(format, data.read_bytes(length))[0]
 
         @classmethod
         def emit(cls, value, parent=None):
@@ -97,7 +97,7 @@ UnsignedLong = simple_type_field(b"UnsignedLong", b"Q")
 class Bool(Field):
     @classmethod
     def parse(cls, data, parent=None):
-        return struct.unpack(b"b", data.read_bytes(1).tobytes())[0] != 0
+        return struct.unpack(b"b", data.read_bytes(1))[0] != 0
 
     @classmethod
     def emit(cls, value, parent=None):
@@ -174,7 +174,7 @@ class UUID(Field):
 class Position(Field):
     @classmethod
     def parse(cls, data, parent=None):
-        value = struct.unpack(">Q", data.read_bytes(8).tobytes())[0]
+        value = struct.unpack(">Q", data.read_bytes(8))[0]
 
         x = value >> 38
         if x & 0x2000000:
@@ -217,7 +217,7 @@ class Data(Field):
         if self._size is None:
             return value
         else:
-            return util.CombinedMemoryView(
+            return util.combine_memoryview(
                 self._size.emit(len(value), parent),
                 value
             )
@@ -226,8 +226,10 @@ class Data(Field):
         if value is None:
             return "None"
         if len(value) < 100:
-            if hasattr(value, "tobytes"):
+            try:
                 value = value.tobytes()
+            except AttributeError:
+                pass
             return "<Data: %s>" % " ".join("%02x" % ord(c) for c in value)
         else:
             return "<Data: %d bytes>" % len(value)
@@ -278,7 +280,7 @@ class Array(Field):
         return arr
 
     def emit(self, value, parent=None):
-        return util.CombinedMemoryView(
+        return util.combine_memoryview(
             self._size.emit(len(value), parent),
             *(self._item.emit(val, value) for val in value)
         )
@@ -320,7 +322,7 @@ class SubFields(Field):
         return subfields
 
     def emit(self, value, parent=None):
-        return util.CombinedMemoryView(
+        return util.combine_memoryview(
             *(val.emit(getattr(value, key), value)
               for key, val in self.subfields.iteritems())
         )

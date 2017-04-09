@@ -33,78 +33,11 @@ class StringEnum(object):
         return iter(self._values)
 
 
-class CombinedMemoryView(object):
-    """
-    Combines multiple memoryviews into one without copying anything.
-
-    CombinedMemoryView objects have a very similar API as memoryviews do,
-    however many low-level functions won't accept such an object in place
-    of a memoryview. In these cases it might be necessary to iterate over
-    the objects data_parts:
-
-      for data_part in combined_memory_view.data_parts:
-        socket.sendall(data_part)
-    """
-    def __init__(self, *data_parts):
-        self.data_parts = []
-        for part in data_parts:
-            if isinstance(part, CombinedMemoryView):
-                self.data_parts += part.data_parts
-            else:
-                self.data_parts.append(part)
-        self.length = sum(len(part) for part in data_parts)
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            if key < 0:
-                key = self.length + key
-
-            pos = 0
-            for part in self.data_parts:
-                if pos + len(part) > key:
-                    return part[key - pos]
-                pos += len(part)
-            raise IndexError("Index out of range")
-
-        elif isinstance(key, slice):
-            if key.step is not None and key.step != 1:
-                raise NotImplementedError()
-
-            start = key.start if key.start >= 0 else key.start + self.length
-            stop = key.stop if key.stop >= 0 else key.stop + self.length
-
-            included_parts = []
-
-            pos = 0
-            for part in self.data_parts:
-                if stop <= pos:
-                    break
-                if start <= pos:
-                    included_parts.append(part[:stop - pos])
-                elif start < pos + len(part):
-                    included_parts.append(part[start - pos:stop - pos])
-                pos += len(part)
-
-            return CombinedMemoryView(*included_parts)
-
-        else:
-            raise TypeError("Key needs to be an integer")
-
-    def append(self, data):
-        if isinstance(data, CombinedMemoryView):
-            self.data_parts += data.data_parts
-        else:
-            self.data_parts.append(data)
-        self.length += len(data)
-
-    def tobytes(self):
-        return b"".join(
-            part.tobytes() if isinstance(part, memoryview) else part
-            for part in self.data_parts
-        )
-
-    def __len__(self):
-        return self.length
+def combine_memoryview(*data_parts):
+    return b"".join(
+        part.tobytes() if isinstance(part, memoryview) else part
+        for part in data_parts
+    )
 
 
 COLOR_PATTERN = re.compile("§.")

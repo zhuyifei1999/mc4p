@@ -219,13 +219,13 @@ class Packet(object):
             else:
                 data = self._data.read()
                 uncompressed_length = parsing.VarInt.emit(0)
-            return util.CombinedMemoryView(
+            return util.combine_memoryview(
                 parsing.VarInt.emit(len(data) + len(uncompressed_length)),
                 uncompressed_length,
                 data
             )
         else:
-            return util.CombinedMemoryView(
+            return util.combine_memoryview(
                 parsing.VarInt.emit(len(self._data)),
                 self._data.read()
             )
@@ -266,7 +266,7 @@ class Packet(object):
         self._dirty = False
 
     def _encode(self):
-        self._data = PacketData(util.CombinedMemoryView(
+        self._data = PacketData(util.combine_memoryview(
             parsing.VarInt.emit(self.id),
             *tuple(
                 field.emit(getattr(self, name), self)
