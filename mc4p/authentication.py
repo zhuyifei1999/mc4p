@@ -16,12 +16,8 @@ import time
 import hashlib
 import collections
 
-try:
-    from urlparse import urljoin
-except ImportError:  # PY3
-    from urllib.parse import urljoin
-
-import requests
+import certifi
+import geventhttpclient.url
 
 from mc4p import encryption
 
@@ -70,7 +66,19 @@ class Authenticator(object):
         self.client_token = self._random_token()
         self._join_times = collections.deque()
 
-        self._request_session = requests.Session()
+        session_url = geventhttpclient.url.URL(self.SESSION_URL)
+        self._session_http_client = geventhttpclient.HTTPClient.from_url(
+            session_url, concurrency=5, ssl_options={
+                'ca_certs': certifi.where()
+            }
+        )
+
+        auth_url = geventhttpclient.url.URL(self.YGGDRASIL_URL)
+        self._auth_http_client = geventhttpclient.HTTPClient.from_url(
+            auth_url, concurrency=5, ssl_options={
+                'ca_certs': certifi.where()
+            }
+        )
 
     def get(self):
         return self
@@ -157,14 +165,15 @@ class Authenticator(object):
         raise NotImplementedError()
 
     def _auth_request(self, url, data):
-        return self._request(urljoin(self.YGGDRASIL_URL, url), data)
+        return self._request(self._auth_http_client, url, data)
 
     def _session_request(self, url, data):
-        return self._request(urljoin(self.SESSION_URL, url), data)
+        return self._request(self._session_http_client, url, data)
 
-    def _request(self, url, data):
-        r = self._request_session.post(url, data=data)
-        response = r.json() if r.content else None
+    def _request(self, client, url, data):
+        url = geventhttpclient.url.URL(url)
+        r = client.post(url.request_uri, body=json.dumps(data))
+        response = json.load(r) if r.content_length else None
         if r.status_code // 100 != 2:
             raise AuthenticationException(response)
         return response

@@ -15,9 +15,9 @@ import errno
 import logging
 import struct
 
-import threading
-import select
-import socket
+import gevent.lock
+import gevent.select
+import gevent.socket
 
 logger = logging.getLogger('rcon')
 
@@ -27,7 +27,7 @@ class Rcon(object):
         self.addr = addr
         self.password = password
         self.sock = None
-        self._send_lock = threading.Lock()
+        self._send_lock = gevent.lock.BoundedSemaphore()
 
         if self.addr is None:
             raise RuntimeError("Could not resolve hostname")
@@ -35,19 +35,18 @@ class Rcon(object):
     def reconnect(self):
         if self.sock is not None:
             self.sock.close()
-            self.sock = None
 
-        self.sock = socket.create_connection(self.addr)
+        self.sock = gevent.socket.create_connection(self.addr)
         self._login()
 
     def execute(self, cmd):
         logger.info('Executing Rcon command: %s', cmd)
-        if self.sock is None:
+        if self.sock is None or self.sock.closed:
             logger.warn('Rcon not connected, reconnecting')
             self.reconnect()
         try:
             return self._send(2, cmd)
-        except socket.error as e:
+        except gevent.socket.error as e:
             if e.errno == errno.EPIPE:
                 logger.warn('Server closed Rcon connection, reconnecting')
                 self.reconnect()
@@ -86,7 +85,7 @@ class Rcon(object):
 
                 in_data += in_payload[8:-2].decode('utf8')
 
-                if not select.select([self.sock], [], [], max_wait)[0]:
+                if not gevent.select.select([self.sock], [], [], max_wait)[0]:
                     break
 
             return in_data

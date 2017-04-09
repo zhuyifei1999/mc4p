@@ -16,14 +16,10 @@ import errno
 import gc
 import logging
 
-import threading
-
-try:
-    import socketserver
-except ImportError:  # PY2
-    import SocketServer as socketserver
-
-import socket
+import gevent.lock
+import gevent.server
+import gevent.socket
+from gevent import event
 
 from mc4p import stream
 from mc4p import protocol
@@ -64,7 +60,7 @@ class _MetaEndpoint(type):
         return packet_handler_wrapper
 
 
-class Endpoint(threading.Thread):
+class Endpoint(gevent.Greenlet):
     __metaclass__ = _MetaEndpoint
 
     def __init__(self, sock, incoming_direction, version=0):
@@ -93,7 +89,7 @@ class Endpoint(threading.Thread):
             for k, v in self.class_packet_handlers.iteritems()
         }
 
-        self._send_lock = threading.Lock()
+        self._send_lock = gevent.lock.BoundedSemaphore()
 
         self.disconnect_handlers = []
         self._disconnect_reason = None
@@ -155,6 +151,49 @@ class Endpoint(threading.Thread):
         key = _packet_handler_key(packet)
         self.instance_packet_handlers[key].remove(f)
 
+    def wait_for_packet(self, packets, timeout=None):
+        self.logger.debug("Waiting for %s" % packets)
+
+        result = event.AsyncResult()
+
+        if not hasattr(packets, "__iter__"):
+            packets = (packets,)
+
+        @self.disconnect_handler
+        def async_result_packet_handler(self_=None, packet_=None):
+            if packet_:
+                result.set(packet_)
+            else:
+                result.set_exception(
+                    DisconnectException(self._disconnect_reason))
+
+        for packet in packets:
+            self.register_packet_handler(packet, async_result_packet_handler)
+
+        try:
+            return result.get(timeout=timeout)
+        except gevent.Timeout:
+            return None
+        finally:
+            self.unregister_disconnect_handler(async_result_packet_handler)
+            for packet in packets:
+                self.unregister_packet_handler(packet,
+                                               async_result_packet_handler)
+
+    def wait_for_multiple(self, packets, timeout=None, max_delay=0.2):
+        packets_received = []
+
+        while True:
+            packet = self.wait_for_packet(
+                packets, timeout=max_delay if packets_received else timeout
+            )
+            if packet:
+                packets_received.append(packet)
+            else:
+                break
+
+        return packets_received
+
     def handle_packet_error(self, error):
         return False
 
@@ -184,11 +223,11 @@ class Endpoint(threading.Thread):
                         self.sock.sendall(part)
                 else:
                     self.sock.sendall(data)
-            except socket.error as e:
+            except gevent.socket.error as e:
                 if e.errno == errno.EPIPE:
                     self.close(str(e))
 
-    def run(self):
+    def _run(self):
         while self.connected:
             try:
                 self._recv()
@@ -198,7 +237,7 @@ class Endpoint(threading.Thread):
             except Exception as e:
                 self.close(str(e))
                 break
-            # gevent.sleep()
+            gevent.sleep()
 
     def _recv(self):
         read_bytes = self.sock.recv_into(self.input_stream.write_buffer())
@@ -210,7 +249,7 @@ class Endpoint(threading.Thread):
                 self.debug_recv_packet(packet)
                 if not self._call_packet_handlers(packet):
                     self.handle_packet(packet)
-                # gevent.sleep()
+                gevent.sleep()
             except Exception as e:
                 self.logger.exception(
                     'Exception occured while handling packet %s' % packet)
@@ -241,23 +280,22 @@ class ClientHandler(Endpoint):
         )
 
 
-class Server(socketserver.ThreadingTCPServer, object):
+class Server(gevent.server.StreamServer):
     def __init__(self, addr, handler=ClientHandler):
-        super(Server, self).__init__(addr, handler)
+        super(Server, self).__init__(addr)
+        self.handler = handler
         self.logger = logging.getLogger("network.server")
         self.logger.info("Listening on %s:%d" % addr)
 
-    def finish_request(self, sock, addr):
-        self.logger.info(
-            "Incoming connection from host %s port %d" % addr[:2])
-        self.RequestHandlerClass(sock, addr, self).run()
-        self.logger.info(
-            "Garbage collected %d objects", gc.collect())
+    def handle(self, sock, addr):
+        self.logger.info("Incoming connection from host %s port %d" % addr[:2])
+        self.handler(sock, addr, self).run()
+        self.logger.info("Garbage collected %d objects", gc.collect())
 
     def run(self):
         try:
-            self.serve_forever()
-        except socket.error, e:
+            super(Server, self).serve_forever()
+        except gevent.socket.error, e:
             self.logger.error(e)
 
 
@@ -271,7 +309,7 @@ class Client(Endpoint):
         self.addr = addr
 
         self.logger.debug("Connecting")
-        sock = socket.create_connection(self.addr)
+        sock = gevent.socket.create_connection(self.addr)
         self.logger.info("Connected")
 
         super(Client, self).__init__(

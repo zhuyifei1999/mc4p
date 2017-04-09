@@ -14,7 +14,7 @@ from __future__ import absolute_import, unicode_literals
 import json
 import logging
 
-import threading
+import gevent
 import requests
 
 from mc4p import plugin
@@ -114,7 +114,7 @@ class SkinsPlugin(
                 self.command_success(
                     conn.proxy, '!skin: Skin has been set to %s' % target)
 
-            threading.Thread(target=async_load_skin).start()
+            gevent.spawn(async_load_skin)
             return True
 
 
