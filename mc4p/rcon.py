@@ -19,14 +19,12 @@ import gevent.lock
 import gevent.select
 import gevent.socket
 
-from mc4p import dns
-
 logger = logging.getLogger('rcon')
 
 
 class Rcon(object):
     def __init__(self, addr, password):
-        self.addr = dns.resolve(*addr)
+        self.addr = addr
         self.password = password
         self.sock = None
         self._send_lock = gevent.lock.BoundedSemaphore()

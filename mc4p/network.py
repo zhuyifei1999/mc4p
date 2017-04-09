@@ -24,7 +24,6 @@ from gevent import event
 from mc4p import stream
 from mc4p import protocol
 from mc4p import util
-from mc4p import dns
 
 
 def _packet_handler_key(packet):
@@ -307,11 +306,7 @@ class Client(Endpoint):
 
         self.logger = logging.getLogger("network.client")
 
-        self.original_addr = addr
-        self.addr = dns.resolve(*addr)
-
-        if self.addr is None:
-            raise Exception("Could not resolve hostname")
+        self.addr = addr
 
         self.logger.debug("Connecting")
         sock = gevent.socket.create_connection(self.addr)

@@ -27,7 +27,6 @@ setuptools.setup(
         "geventhttpclient",
         "certifi",
         "pycrypto",
-        "dnspython"
     ),
     extras_require={
         'performance': ("pycrypto",),
