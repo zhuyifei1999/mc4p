@@ -8,3 +8,7 @@
 # and/or modify it under the terms of the Do What The Fuck You Want
 # To Public License, Version 2, as published by Sam Hocevar. See
 # http://www.wtfpl.net/txt/copying/ for more details
+
+# Need to patch everything ASAP
+import gevent.monkey as _monkey
+_monkey.patch_all()
