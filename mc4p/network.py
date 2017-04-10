@@ -23,7 +23,6 @@ from gevent import event
 
 from mc4p import stream
 from mc4p import protocol
-from mc4p import util
 
 
 def _packet_handler_key(packet):
@@ -235,7 +234,6 @@ class Endpoint(gevent.Greenlet):
                     self.logger.exception(e)
                 self.close(str(e))
                 break
-            gevent.sleep()
 
     def _recv(self):
         read_bytes = self.input_stream.recv_from(self.sock)
@@ -246,7 +244,6 @@ class Endpoint(gevent.Greenlet):
                 self.debug_recv_packet(packet)
                 if not self._call_packet_handlers(packet):
                     self.handle_packet(packet)
-                gevent.sleep()
             except Exception as e:
                 self.logger.exception(
                     'Exception occured while handling packet %s' % packet)
