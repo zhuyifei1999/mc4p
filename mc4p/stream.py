@@ -64,70 +64,70 @@ class PacketStream(object):
 class BufferedPacketInputStream(PacketStream):
     def __init__(self, direction, version=0):
         super(BufferedPacketInputStream, self).__init__(direction, version)
-        self.input_buffer = memoryview(bytearray(BUFFER_SIZE))
-        self.output_buffer = self.input_buffer
-        self.write_position = 0
-        self.read_position = 0
-        self.last_boundary = 0
+        self.buf = memoryview(bytearray(BUFFER_SIZE))
+        self.write_pos = 0
+        self.read_pos = 0
+        # when read_pos == write_pos, indicate if buffer is full or empty
+        self.full = False
 
     def enable_encryption(self, shared_secret):
+        assert self.read_pos == self.write_pos
         super(BufferedPacketInputStream, self).enable_encryption(shared_secret)
-        assert self.read_position == self.write_position
-        self.output_buffer = memoryview(bytearray(BUFFER_SIZE))
+        self.buf = memoryview(bytearray(BUFFER_SIZE))
 
-    def write_buffer(self):
-        if self.last_boundary > self.write_position:
-            limit = self.last_boundary
+    def recv_from(self, sock):
+        if self.read_pos > self.write_pos:
+            part = self.buf[self.write_pos:self.read_pos]
         else:
-            limit = BUFFER_SIZE
-        if limit == self.write_position:
+            part = self.buf[self.write_pos:]
+
+        if self.read_pos == self.write_pos and self.full:
             raise IOError("Buffer overflow")
-        return self.input_buffer[self.write_position:limit]
 
-    def bytes_available(self):
-        if self.write_position >= self.read_position:
-            return self.write_position - self.read_position
-        else:
-            return BUFFER_SIZE - self.read_position + self.write_position
+        n = sock.recv_into(part)
 
-    def added_bytes(self, n):
-        """Move the write position forward by n bytes"""
-        pos = self.write_position
+        self.full = self.read_pos == self.write_pos
 
         if self._cipher is not None:
-            # TODO: There has to be a way to do this without copying the
-            # data first
-            data = self._cipher.decrypt(
-                self.input_buffer[pos:pos + n].tobytes()
-            )
-            self.output_buffer[pos:pos + n] = data
+            part[:] = self._cipher.decrypt(part.tobytes())
 
-        self.write_position += n
-        if self.write_position >= BUFFER_SIZE:
-            self.write_position = 0
+        self.write_pos += n
+        assert self.write_pos <= BUFFER_SIZE
+        if self.write_pos == BUFFER_SIZE:
+            self.write_pos = 0
 
-    def add_bytes(self, bytes):
-        """Convenience function to add bytes to the buffer"""
-        self.write_buffer()[:len(bytes)] = bytes
-        self.added_bytes(len(bytes))
+        return n
+
+    def bytes_used(self):
+        if self.write_pos >= self.read_pos:
+            return self.write_pos - self.read_pos
+        else:
+            return BUFFER_SIZE - self.read_pos + self.write_pos
 
     def read_packet(self):
-        length = self.read_varint()
-        if self.compression_threshold is not None:
-            uncompressed_length, varint_length = self.read_varint(True)
-            length -= varint_length
+        last_boundary = self.read_pos
+        try:
+            length = self.read_varint()
+            if self.compression_threshold is not None:
+                uncompressed_length, varint_length = self.read_varint(True)
+                length -= varint_length
+            else:
+                uncompressed_length = 0
+
+            data = self.get_data(length)
+            if uncompressed_length > 0:
+                data = CompressedData(data, uncompressed_length)
+        except PartialPacketException:
+            self.read_pos = last_boundary
+            raise
         else:
-            uncompressed_length = 0
+            packet = self.context.read_packet(data)
+            new_context = self.context.handle_packet(packet, self)
+            if new_context:
+                self.change_context(new_context)
 
-        data = self.get_data(length)
-        if uncompressed_length > 0:
-            data = CompressedData(data, uncompressed_length)
-
-        packet = self.context.read_packet(data)
-        new_context = self.context.handle_packet(packet, self)
-        if new_context:
-            self.change_context(new_context)
-        return packet
+            self.full = False
+            return packet
 
     def read_packets(self):
         try:
@@ -138,12 +138,12 @@ class BufferedPacketInputStream(PacketStream):
 
     def read_varint(self, return_length=False):
         value = 0
-        bytes_available = self.bytes_available()
+        bytes_used = self.bytes_used()
         for i in range(5):
-            if i >= bytes_available:
-                raise self.partial_packet()
-            b, = struct.unpack(b"B", self.output_buffer[self.read_position])
-            self.read_position = (self.read_position + 1) % BUFFER_SIZE
+            if i >= bytes_used:
+                raise PartialPacketException()
+            b = ord(self.buf[self.read_pos])
+            self.read_pos = (self.read_pos + 1) % BUFFER_SIZE
             value |= (b & 0x7F) << 7 * i
             if not b & 0x80:
                 if return_length:
@@ -153,16 +153,11 @@ class BufferedPacketInputStream(PacketStream):
         raise IOError("Encountered varint longer than 5 bytes")
 
     def get_data(self, n):
-        if n > self.bytes_available():
-            raise self.partial_packet()
-        view = BufferView(self.output_buffer, self.read_position, n)
-        self.read_position = (self.read_position + n) % BUFFER_SIZE
-        self.last_boundary = self.read_position
+        if n > self.bytes_used():
+            raise PartialPacketException()
+        view = BufferView(self.buf, self.read_pos, n)
+        self.read_pos = (self.read_pos + n) % BUFFER_SIZE
         return view
-
-    def partial_packet(self):
-        self.read_position = self.last_boundary
-        return PartialPacketException()
 
 
 class PacketOutputStream(PacketStream):
@@ -190,37 +185,12 @@ class PartialPacketException(Exception):
 
 class BufferView(protocol.PacketData):
     def __init__(self, bfr, offset, length):
-        self.buffer = bfr
-        self.offset = offset
-        self.length = length
-        self.expired = False
-        self.read_position = 0
-
-    def read(self):
-        limit = min(self.offset + self.length, BUFFER_SIZE)
-        data = self.buffer[self.offset:limit]
-        if self.offset + self.length > BUFFER_SIZE:
+        data = bfr[offset:offset + length]
+        if offset + length > BUFFER_SIZE:
             logger.debug("Rewinding buffer")
-            limit = self.offset + self.length - BUFFER_SIZE
-            data = util.combine_memoryview(data, self.buffer[:limit])
-        return data
-
-    def read_bytes(self, n=None):
-        if n is None:
-            n = self.length - self.read_position
-        elif self.length < self.read_position + n:
-            raise IOError("Buffer underflow")
-        pos = self.read_position + self.offset
-        data = self.buffer[pos:pos + n]
-        if len(data) < n:
-            data = util.combine_memoryview(
-                data, self.buffer[:pos + n - BUFFER_SIZE]
-            )
-        self.read_position += n
-        return data
-
-    def __len__(self):
-        return self.length
+            limit = offset + length - BUFFER_SIZE
+            data = data.tobytes() + bfr[:limit].tobytes()
+        super(BufferView, self).__init__(data)
 
 
 class CompressedData(protocol.PacketData):
@@ -230,14 +200,14 @@ class CompressedData(protocol.PacketData):
         self.data = data
         self.length = uncompressed_length
 
-        self.read_position = 0
+        self.read_pos = 0
         self.decompressed_data = b''
         self.decompress_object = zlib.decompressobj()
 
     def decompress(self, length):
-        while length + self.read_position > len(self.decompressed_data):
+        while length + self.read_pos > len(self.decompressed_data):
             limit = min(self.CHUNK_SIZE,
-                        len(self.data) - self.data.read_position)
+                        len(self.data) - self.data.read_pos)
 
             if limit <= 0:
                 raise IOError("Buffer underflow")
@@ -250,38 +220,19 @@ class CompressedData(protocol.PacketData):
             self.decompressed_data += self.decompress_object.decompress(chunk)
 
     def read(self):
-        self.decompress(self.length - self.read_position)
+        self.decompress(self.length - self.read_pos)
         return memoryview(self.decompressed_data)
 
     def read_bytes(self, n=None):
         if n is None:
-            n = self.length - self.read_position
-        elif self.length < self.read_position + n:
+            n = self.length - self.read_pos
+        elif self.length < self.read_pos + n:
             raise IOError("Buffer underflow")
         self.decompress(n)
-        original_position = self.read_position
-        self.read_position += n
+        original_position = self.read_pos
+        self.read_pos += n
         return memoryview(self.decompressed_data)[
-            original_position:self.read_position]
+            original_position:self.read_pos]
 
     def read_compressed(self):
         return self.data.read()
-
-    def __len__(self):
-        return self.length
-
-
-if __name__ == "__main__":
-    stream = BufferedPacketInputStream(protocol.Direction.server_bound)
-    data = b"11 00 05 0b 31 39 32 2e 31 36 38 2e 30 2e 31 88 dc 01 01 00"
-    data = data.replace(" ", "")
-    bfr = stream.write_buffer()
-    for i in range(len(data) // 2):
-        bfr[i] = chr(int(data[i * 2] + data[i * 2 + 1], 16))
-    stream.added_bytes(len(data) // 2)
-
-    for packet in stream.read_packets():
-        print(packet)
-        for field in packet._fields:
-            print(field, getattr(packet, field))
-        print()

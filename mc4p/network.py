@@ -238,10 +238,9 @@ class Endpoint(gevent.Greenlet):
             gevent.sleep()
 
     def _recv(self):
-        read_bytes = self.sock.recv_into(self.input_stream.write_buffer())
+        read_bytes = self.input_stream.recv_from(self.sock)
         if not read_bytes:
             raise EOFError()
-        self.input_stream.added_bytes(read_bytes)
         for packet in self.input_stream.read_packets():
             try:
                 self.debug_recv_packet(packet)

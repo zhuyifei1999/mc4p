@@ -325,18 +325,18 @@ class PacketData(object):
             data = memoryview(data)
         self.data = data
         self.length = len(data)
-        self.read_position = 0
+        self.read_pos = 0
 
     def read(self):
         return self.data
 
     def read_bytes(self, n=None):
         if n is None:
-            n = self.length - self.read_position
-        elif self.length < self.read_position + n:
+            n = self.length - self.read_pos
+        elif self.length < self.read_pos + n:
             raise IOError("Buffer underflow")
-        data = self.data[self.read_position:self.read_position + n]
-        self.read_position += n
+        data = self.data[self.read_pos:self.read_pos + n]
+        self.read_pos += n
         return data
 
     def read_compressed(self):
