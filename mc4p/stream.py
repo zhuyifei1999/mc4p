@@ -84,12 +84,12 @@ class BufferedPacketInputStream(PacketStream):
 
         n = sock.recv_into(part)
 
-        self.full = self.read_pos == self.write_pos
-
         if self._cipher is not None:
             part[:] = self._cipher.decrypt(part.tobytes())
 
         self.write_pos += n
+        self.full = self.read_pos == self.write_pos
+
         assert self.write_pos <= BUFFER_SIZE
         if self.write_pos == BUFFER_SIZE:
             self.write_pos = 0
