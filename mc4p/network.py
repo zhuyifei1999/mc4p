@@ -200,27 +200,39 @@ class Endpoint(gevent.Greenlet):
         if self.connected:
             if self._disconnect_reason is None:
                 self._disconnect_reason = (
-                    reason or "Connection closed by us")
+                    reason or "Connection closed by proxy layer")
             self.connected = False
+
+            if self.output_direction == protocol.Direction.client_bound:
+                try:
+                    self.send(
+                        getattr(self.output_stream.context, 'Disconnect')(
+                            reason=self._disconnect_reason
+                        ))
+                except Exception:
+                    pass
+
             self.sock.close()
             self._handle_disconnect()
 
     def send(self, packet):
-        with self._send_lock:
-            self.debug_send_packet(packet)
+        try:
+            with self._send_lock:
+                self.debug_send_packet(packet)
 
-            if packet._direction not in (None, self.output_direction):
-                self.logger.warn(
-                    'Packet %s direction mismatch! Expected: %s Got: %s',
-                    packet, self.output_direction, packet._direction)
+                if packet._direction not in (None, self.output_direction):
+                    self.logger.warn(
+                        'Packet %s direction mismatch! Expected: %s Got: %s',
+                        packet, self.output_direction, packet._direction)
 
-            data = self.output_stream.emit(packet)
+                data = self.output_stream.emit(packet)
 
-            try:
                 self.sock.sendall(data)
-            except gevent.socket.error as e:
-                if e.errno == errno.EPIPE:
-                    self.close(str(e))
+        except gevent.socket.error as e:
+            if e.errno == errno.EPIPE:
+                self.close(str(e))
+            else:
+                raise
 
     def _run(self):
         while self.connected:

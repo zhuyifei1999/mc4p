@@ -156,6 +156,12 @@ class Chat(Json):
     def format(cls, value):
         return util.parse_chat(value)
 
+    @classmethod
+    def emit(cls, value, parent=None):
+        if isinstance(value, basestring):
+            value = {'text': value}
+        return super(Chat, Chat).emit(value, parent)
+
 
 class UUID(Field):
     @classmethod
