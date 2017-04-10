@@ -20,7 +20,7 @@ from mc4p import encryption
 
 logger = logging.getLogger("stream")
 
-BUFFER_SIZE = 1 << 20
+BUFFER_SIZE = 1 << 16
 
 
 class PacketStream(object):
@@ -97,8 +97,10 @@ class BufferedPacketInputStream(PacketStream):
         return n
 
     def bytes_used(self):
-        if self.write_pos >= self.read_pos:
+        if self.write_pos > self.read_pos:
             return self.write_pos - self.read_pos
+        elif self.read_pos == self.write_pos:
+            return BUFFER_SIZE if self.full else 0
         else:
             return BUFFER_SIZE - self.read_pos + self.write_pos
 
