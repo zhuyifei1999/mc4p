@@ -13,16 +13,14 @@ from __future__ import (
     division, absolute_import, print_function, unicode_literals)
 
 import logging
-import struct
 import zlib
 
 from mc4p import protocol
-from mc4p import util
 from mc4p import encryption
 
 logger = logging.getLogger("stream")
 
-BUFFER_SIZE = 1024 * 1024 * 64
+BUFFER_SIZE = 1 << 16
 
 
 class PacketStream(object):
