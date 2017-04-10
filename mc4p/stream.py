@@ -20,7 +20,7 @@ from mc4p import encryption
 
 logger = logging.getLogger("stream")
 
-BUFFER_SIZE = 1 << 16
+BUFFER_SIZE = 1 << 20
 
 
 class PacketStream(object):
