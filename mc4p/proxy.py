@@ -60,6 +60,10 @@ class ProxyClientHandler(network.ClientHandler):
         for plugin in self.proxy.plugins:
             plugin.on_connect(self.proxy)
 
+    def recv(self):
+        super(ProxyClientHandler, self).recv()
+        self.real_server.flush()
+
     def handle_disconnect(self):
         super(ProxyClientHandler, self).handle_disconnect()
         self.real_server.close('Client disconnected')
@@ -92,6 +96,10 @@ class ProxyClient(network.Client):
     def handle_packet(self, packet):
         self.real_client.send(packet)
         return True
+
+    def recv(self):
+        super(ProxyClient, self).recv()
+        self.real_client.flush()
 
     def handle_disconnect(self):
         super(ProxyClient, self).handle_disconnect()

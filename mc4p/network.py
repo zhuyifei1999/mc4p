@@ -78,7 +78,7 @@ class Endpoint(gevent.Greenlet):
         self.output_direction = protocol.Direction.opposite_direction(
             incoming_direction
         )
-        self.output_stream = stream.PacketOutputStream(
+        self.output_stream = stream.BufferedPacketOutputStream(
             self.output_direction, version
         )
 
@@ -212,6 +212,7 @@ class Endpoint(gevent.Greenlet):
                 except Exception:
                     pass
 
+            self.flush()
             self.sock.close()
             self._handle_disconnect()
 
@@ -225,9 +226,7 @@ class Endpoint(gevent.Greenlet):
                         'Packet %s direction mismatch! Expected: %s Got: %s',
                         packet, self.output_direction, packet._direction)
 
-                data = self.output_stream.emit(packet)
-
-                self.sock.sendall(data)
+                self.output_stream.send(self.sock, packet)
         except gevent.socket.error as e:
             if e.errno == errno.EPIPE:
                 self.close(str(e))
@@ -237,7 +236,7 @@ class Endpoint(gevent.Greenlet):
     def _run(self):
         while self.connected:
             try:
-                self._recv()
+                self.recv()
             except EOFError:
                 self.close("Connection closed")
                 break
@@ -247,7 +246,8 @@ class Endpoint(gevent.Greenlet):
                 self.close(str(e))
                 break
 
-    def _recv(self):
+    def recv(self):
+        self.flush()
         read_bytes = self.input_stream.recv_from(self.sock)
         if not read_bytes:
             raise EOFError()
@@ -261,6 +261,9 @@ class Endpoint(gevent.Greenlet):
                     'Exception occured while handling packet %s' % packet)
                 if not self.handle_packet_error(e):
                     raise
+
+    def flush(self):
+        self.output_stream.flush(self.sock)
 
     def debug_send_packet(self, packet):
         pass

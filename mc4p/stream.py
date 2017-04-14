@@ -61,9 +61,9 @@ class PacketStream(object):
         self._cipher = encryption.AES128CFB8(shared_secret)
 
 
-class BufferedPacketInputStream(PacketStream):
+class BufferedPacketStream(PacketStream):
     def __init__(self, direction, version=0):
-        super(BufferedPacketInputStream, self).__init__(direction, version)
+        super(BufferedPacketStream, self).__init__(direction, version)
         self.buf = memoryview(bytearray(BUFFER_SIZE))
         self.write_pos = 0
         self.read_pos = 0
@@ -72,32 +72,28 @@ class BufferedPacketInputStream(PacketStream):
         self._lock = gevent.lock.BoundedSemaphore()
 
     def enable_encryption(self, shared_secret):
-        assert self.read_pos == self.write_pos
-        super(BufferedPacketInputStream, self).enable_encryption(shared_secret)
+        assert not self.bytes_used
+        super(BufferedPacketStream, self).enable_encryption(shared_secret)
         self.buf = memoryview(bytearray(BUFFER_SIZE))
 
-    def recv_from(self, sock):
-        return self._write(sock.recv_into)
-
     def _write(self, buf_func):
-        with self._lock:
-            if self.read_pos > self.write_pos:
-                part = self.buf[self.write_pos:self.read_pos]
-            else:
-                part = self.buf[self.write_pos:]
+        if self.read_pos > self.write_pos:
+            part = self.buf[self.write_pos:self.read_pos]
+        else:
+            part = self.buf[self.write_pos:]
 
-            if self.full:
-                raise IOError("Buffer overflow")
+        if self.full:
+            raise IOError("Buffer overflow")
 
-            n = buf_func(part)
+        n = buf_func(part)
 
-            if self._cipher is not None:
-                part[:n] = self._cipher.decrypt(part[:n].tobytes())
+        if self._cipher is not None:
+            part[:n] = self._cipher.decrypt(part[:n].tobytes())
 
-            self.write_pos = (self.write_pos + n) % BUFFER_SIZE
-            self.full = self.read_pos == self.write_pos
+        self.write_pos = (self.write_pos + n) % BUFFER_SIZE
+        self.full = self.read_pos == self.write_pos
 
-            return n
+        return n
 
     @property
     def bytes_used(self):
@@ -107,6 +103,29 @@ class BufferedPacketInputStream(PacketStream):
             return BUFFER_SIZE if self.full else 0
         else:
             return BUFFER_SIZE - self.read_pos + self.write_pos
+
+    @property
+    def bytes_avail(self):
+        return BUFFER_SIZE - self.bytes_used
+
+    def _read(self, n=None):
+        if n is None:
+            n = self.bytes_used
+        elif n > self.bytes_used:
+            raise PartialPacketException
+        data = self.buf[self.read_pos:self.read_pos + n]
+        self.read_pos += n
+        if self.read_pos > BUFFER_SIZE:
+            logger.debug("Rewinding buffer")
+            self.read_pos -= BUFFER_SIZE
+            data = data.tobytes() + self.buf[:self.read_pos].tobytes()
+        return data
+
+
+class BufferedPacketInputStream(BufferedPacketStream):
+    def recv_from(self, sock):
+        with self._lock:
+            return self._write(sock.recv_into)
 
     def read_packet(self):
         with self._lock:
@@ -119,7 +138,7 @@ class BufferedPacketInputStream(PacketStream):
                 else:
                     uncompressed_length = 0
 
-                data = self._get_data(length)
+                data = BufferView(self._read(length))
                 if uncompressed_length:
                     data = CompressedData(data, uncompressed_length)
             except PartialPacketException:
@@ -153,29 +172,9 @@ class BufferedPacketInputStream(PacketStream):
                     return value
         raise IOError("Encountered varint longer than 5 bytes")
 
-    def _get_data(self, n):
-        view = BufferView(self._read(n))
-        return view
-
-    def _read(self, n):
-        if n > self.bytes_used:
-            raise PartialPacketException
-        data = self.buf[self.read_pos:self.read_pos + n]
-        self.read_pos += n
-        if self.read_pos > BUFFER_SIZE:
-            logger.debug("Rewinding buffer")
-            self.read_pos -= BUFFER_SIZE
-            data = data.tobytes() + self.buf[:self.read_pos].tobytes()
-        return data
-
 
 class PacketOutputStream(PacketStream):
-    def __init__(self, direction, version=0):
-        super(PacketOutputStream, self).__init__(direction, version)
-        self.encrypted = False
-        self.compressed = False
-
-    def emit(self, packet):
+    def _emit(self, packet):
         data = packet._emit(self.compression_threshold)
 
         new_context = self.context.handle_packet(packet, self)
@@ -186,6 +185,38 @@ class PacketOutputStream(PacketStream):
             data = self._cipher.encrypt(data.tobytes())
 
         return data
+
+    def send(self, sock, packet):
+        sock.sendall(self._emit(packet))
+
+    def flush(self, sock):
+        pass
+
+
+class BufferedPacketOutputStream(PacketOutputStream, BufferedPacketStream):
+    def send(self, sock, packet):
+        with self._lock:
+            data = self._emit(packet)
+            if len(data) > self.bytes_avail:
+                self.flush(sock)
+
+            if len(data) > self.bytes_avail:
+                raise IOError("Buffer overflow")
+
+            data = [data]  # Python variable scoping
+            while data[0]:
+                def buf_func(buf):
+                    n = min(len(data[0]), len(buf))
+                    buf[:n] = data[0][:n]
+                    data[0] = data[0][n:]
+                    return n
+                self._write(buf_func)
+
+    def flush(self, sock):
+        data = self._read()
+        if data:
+            logger.debug('real send {} bytes'.format(len(data)))
+            sock.sendall(data)
 
 
 class PartialPacketException(Exception):
