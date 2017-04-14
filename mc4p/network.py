@@ -203,16 +203,17 @@ class Endpoint(gevent.Greenlet):
                     reason or "Connection closed by proxy layer")
             self.connected = False
 
-            if self.output_direction == protocol.Direction.client_bound:
-                try:
+            try:
+                if self.output_direction == protocol.Direction.client_bound:
                     self.send(
                         getattr(self.output_stream.context, 'Disconnect')(
                             reason=self._disconnect_reason
                         ))
-                except Exception:
-                    pass
+                self.flush()
+            except Exception:
+                pass
 
-            self.flush()
+
             self.sock.close()
             self._handle_disconnect()
 
