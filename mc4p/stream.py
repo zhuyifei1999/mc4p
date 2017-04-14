@@ -22,7 +22,7 @@ from mc4p import encryption
 
 logger = logging.getLogger("stream")
 
-BUFFER_SIZE = 1 << 16
+BUFFER_SIZE = 1 << 20
 
 
 class PacketStream(object):
@@ -86,12 +86,14 @@ class BufferedPacketStream(PacketStream):
             raise IOError("Buffer overflow")
 
         n = buf_func(part)
+        if n:
+            logger.debug('recv {} bytes'.format(n))
 
-        if self._cipher is not None:
-            part[:n] = self._cipher.decrypt(part[:n].tobytes())
+            if self._cipher is not None:
+                part[:n] = self._cipher.decrypt(part[:n].tobytes())
 
-        self.write_pos = (self.write_pos + n) % BUFFER_SIZE
-        self.full = self.read_pos == self.write_pos
+            self.write_pos = (self.write_pos + n) % BUFFER_SIZE
+            self.full = self.read_pos == self.write_pos
 
         return n
 
@@ -195,14 +197,14 @@ class PacketOutputStream(PacketStream):
 
 class BufferedPacketOutputStream(PacketOutputStream, BufferedPacketStream):
     def send(self, sock, packet):
+        data = self._emit(packet)
+        if len(data) > self.bytes_avail:
+            self.flush(sock)
+
+        if len(data) > self.bytes_avail:
+            raise IOError("Buffer overflow")
+
         with self._lock:
-            data = self._emit(packet)
-            if len(data) > self.bytes_avail:
-                self.flush(sock)
-
-            if len(data) > self.bytes_avail:
-                raise IOError("Buffer overflow")
-
             data = [data]  # Python variable scoping
             while data[0]:
                 def buf_func(buf):
@@ -213,10 +215,11 @@ class BufferedPacketOutputStream(PacketOutputStream, BufferedPacketStream):
                 self._write(buf_func)
 
     def flush(self, sock):
-        data = self._read()
-        if data:
-            logger.debug('real send {} bytes'.format(len(data)))
-            sock.sendall(data)
+        with self._lock:
+            data = self._read()
+            if data:
+                logger.debug('real send {} bytes'.format(len(data)))
+                sock.sendall(data)
 
 
 class PartialPacketException(Exception):
