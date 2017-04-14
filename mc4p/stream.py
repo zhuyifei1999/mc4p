@@ -15,6 +15,8 @@ from __future__ import (
 import logging
 import zlib
 
+import gevent.lock
+
 from mc4p import protocol
 from mc4p import encryption
 
@@ -67,6 +69,7 @@ class BufferedPacketInputStream(PacketStream):
         self.read_pos = 0
         # when read_pos == write_pos, indicate if buffer is full or empty
         self.full = False
+        self._lock = gevent.lock.BoundedSemaphore()
 
     def enable_encryption(self, shared_secret):
         assert self.read_pos == self.write_pos
@@ -74,28 +77,29 @@ class BufferedPacketInputStream(PacketStream):
         self.buf = memoryview(bytearray(BUFFER_SIZE))
 
     def recv_from(self, sock):
-        if self.read_pos > self.write_pos:
-            part = self.buf[self.write_pos:self.read_pos]
-        else:
-            part = self.buf[self.write_pos:]
+        return self._write(sock.recv_into)
 
-        if self.read_pos == self.write_pos and self.full:
-            raise IOError("Buffer overflow")
+    def _write(self, buf_func):
+        with self._lock:
+            if self.read_pos > self.write_pos:
+                part = self.buf[self.write_pos:self.read_pos]
+            else:
+                part = self.buf[self.write_pos:]
 
-        n = sock.recv_into(part)
+            if self.full:
+                raise IOError("Buffer overflow")
 
-        if self._cipher is not None:
-            part[:] = self._cipher.decrypt(part.tobytes())
+            n = buf_func(part)
 
-        self.write_pos += n
-        self.full = self.read_pos == self.write_pos
+            if self._cipher is not None:
+                part[:n] = self._cipher.decrypt(part[:n].tobytes())
 
-        assert self.write_pos <= BUFFER_SIZE
-        if self.write_pos == BUFFER_SIZE:
-            self.write_pos = 0
+            self.write_pos = (self.write_pos + n) % BUFFER_SIZE
+            self.full = self.read_pos == self.write_pos
 
-        return n
+            return n
 
+    @property
     def bytes_used(self):
         if self.write_pos > self.read_pos:
             return self.write_pos - self.read_pos
@@ -105,29 +109,30 @@ class BufferedPacketInputStream(PacketStream):
             return BUFFER_SIZE - self.read_pos + self.write_pos
 
     def read_packet(self):
-        last_boundary = self.read_pos
-        try:
-            length = self.read_varint()
-            if self.compression_threshold is not None:
-                uncompressed_length, varint_length = self.read_varint(True)
-                length -= varint_length
+        with self._lock:
+            last_boundary = self.read_pos
+            try:
+                length = self._read_varint()
+                if self.compression_threshold is not None:
+                    uncompressed_length, varint_length = self._read_varint(True)
+                    length -= varint_length
+                else:
+                    uncompressed_length = 0
+
+                data = self._get_data(length)
+                if uncompressed_length:
+                    data = CompressedData(data, uncompressed_length)
+            except PartialPacketException:
+                self.read_pos = last_boundary
+                raise
             else:
-                uncompressed_length = 0
+                packet = self.context.read_packet(data)
+                new_context = self.context.handle_packet(packet, self)
+                if new_context:
+                    self.change_context(new_context)
 
-            data = self.get_data(length)
-            if uncompressed_length > 0:
-                data = CompressedData(data, uncompressed_length)
-        except PartialPacketException:
-            self.read_pos = last_boundary
-            raise
-        else:
-            packet = self.context.read_packet(data)
-            new_context = self.context.handle_packet(packet, self)
-            if new_context:
-                self.change_context(new_context)
-
-            self.full = False
-            return packet
+                self.full = False
+                return packet
 
     def read_packets(self):
         try:
@@ -136,14 +141,10 @@ class BufferedPacketInputStream(PacketStream):
         except PartialPacketException:
             pass
 
-    def read_varint(self, return_length=False):
+    def _read_varint(self, return_length=False):
         value = 0
-        bytes_used = self.bytes_used()
         for i in range(5):
-            if i >= bytes_used:
-                raise PartialPacketException()
-            b = ord(self.buf[self.read_pos])
-            self.read_pos = (self.read_pos + 1) % BUFFER_SIZE
+            b = ord(self._read(1)[0])
             value |= (b & 0x7F) << 7 * i
             if not b & 0x80:
                 if return_length:
@@ -152,12 +153,20 @@ class BufferedPacketInputStream(PacketStream):
                     return value
         raise IOError("Encountered varint longer than 5 bytes")
 
-    def get_data(self, n):
-        if n > self.bytes_used():
-            raise PartialPacketException()
-        view = BufferView(self.buf, self.read_pos, n)
-        self.read_pos = (self.read_pos + n) % BUFFER_SIZE
+    def _get_data(self, n):
+        view = BufferView(self._read(n))
         return view
+
+    def _read(self, n):
+        if n > self.bytes_used:
+            raise PartialPacketException
+        data = self.buf[self.read_pos:self.read_pos + n]
+        self.read_pos += n
+        if self.read_pos > BUFFER_SIZE:
+            logger.debug("Rewinding buffer")
+            self.read_pos -= BUFFER_SIZE
+            data = data.tobytes() + self.buf[:self.read_pos].tobytes()
+        return data
 
 
 class PacketOutputStream(PacketStream):
@@ -184,13 +193,7 @@ class PartialPacketException(Exception):
 
 
 class BufferView(protocol.PacketData):
-    def __init__(self, bfr, offset, length):
-        data = bfr[offset:offset + length]
-        if offset + length > BUFFER_SIZE:
-            logger.debug("Rewinding buffer")
-            limit = offset + length - BUFFER_SIZE
-            data = data.tobytes() + bfr[:limit].tobytes()
-        super(BufferView, self).__init__(data)
+    pass
 
 
 class CompressedData(protocol.PacketData):
