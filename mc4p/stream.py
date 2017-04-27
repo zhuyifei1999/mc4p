@@ -15,7 +15,7 @@ from __future__ import (
 import logging
 import zlib
 
-import gevent.lock
+import threading
 
 from mc4p import protocol
 from mc4p import encryption
@@ -69,7 +69,7 @@ class BufferedPacketStream(PacketStream):
         self.read_pos = 0
         # when read_pos == write_pos, indicate if buffer is full or empty
         self.full = False
-        self._lock = gevent.lock.BoundedSemaphore()
+        self._lock = threading.Lock()
 
     def enable_encryption(self, shared_secret):
         assert not self.bytes_used
