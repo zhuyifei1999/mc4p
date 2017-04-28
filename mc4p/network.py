@@ -13,9 +13,8 @@ from __future__ import absolute_import, unicode_literals
 
 import collections
 import errno
-import gc
 import logging
-
+import select
 import threading
 
 try:
@@ -208,20 +207,21 @@ class Endpoint(threading.Thread):
                 break
 
     def recv(self):
-        self.flush()
-        read_bytes = self.input_stream.recv_from(self.sock)
-        if not read_bytes:
-            raise EOFError()
-        for packet in self.input_stream.read_packets():
-            try:
-                self.debug_recv_packet(packet)
-                if not self._call_packet_handlers(packet):
-                    self.handle_packet(packet)
-            except Exception as e:
-                self.logger.exception(
-                    'Exception occured while handling packet %s' % packet)
-                if not self.handle_packet_error(e):
-                    raise
+        while self.input_stream.bytes_avail and \
+                select.select([self.sock], [], [], 0)[0]:
+            read_bytes = self.input_stream.recv_from(self.sock)
+            if not read_bytes:
+                raise EOFError()
+            for packet in self.input_stream.read_packets():
+                try:
+                    self.debug_recv_packet(packet)
+                    if not self._call_packet_handlers(packet):
+                        self.handle_packet(packet)
+                except Exception as e:
+                    self.logger.exception(
+                        'Exception occured while handling packet %s' % packet)
+                    if not self.handle_packet_error(e):
+                        raise
 
     def flush(self):
         self.output_stream.flush(self.sock)
@@ -260,8 +260,6 @@ class Server(socketserver.ForkingTCPServer, object):
         self.logger.info(
             "Incoming connection from host %s port %d" % addr[:2])
         self.RequestHandlerClass(sock, addr, self).run()
-        self.logger.info(
-            "Garbage collected %d objects", gc.collect())
 
     def run(self):
         try:
