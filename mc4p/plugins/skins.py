@@ -49,27 +49,27 @@ def load_skin(user):
 
 class SkinsPlugin(
     plugin.RequireUsernamePlugin,
-    plugin.DBMPlugin,
+    plugin.RedisPlugin,
     plugin.CommandPlugin
 ):
     @staticmethod
-    def dbmkey(username, typ='skins'):
+    def key(username, typ='skins'):
         return 'skins:{}:{}'.format(typ, username).encode('utf-8')
 
     def username_loaded(self, proxy):
-        username = self.dbm.get(self.dbmkey(proxy.username, 'usernames'))
+        username = proxy.redis.get(self.key(proxy.username, 'usernames'))
         username = username.decode('utf-8') if username else proxy.username
-        skinkey = self.dbmkey(proxy.username)
-        if skinkey not in self.dbm:
-            self.dbm[skinkey] = json.dumps(load_skin(username))
+        skinkey = self.key(proxy.username)
+        if not proxy.redis.exists(skinkey):
+            proxy.redis.set(skinkey, json.dumps(load_skin(username)))
 
     @plugin.Plugin.packet_handler(plugin.CLIENT_PROTOCOL.play.PlayerListItem)
     def set_skin(self, conn, packet):
         if packet.action == 0:
             for player in packet.players:
-                skinkey = self.dbmkey(player.data.name)
-                if skinkey in self.dbm:
-                    skindata = json.loads(self.dbm[skinkey])
+                skinkey = self.key(player.data.name)
+                if conn.proxy.redis.exists(skinkey):
+                    skindata = json.loads(conn.proxy.redis.get(skinkey))
                     if skindata is None:
                         continue
 
@@ -92,25 +92,22 @@ class SkinsPlugin(
 
     @plugin.Plugin.packet_handler(plugin.SERVER_PROTOCOL.play.ChatMessage)
     def skin_command(self, conn, packet):
-        mapkey = self.dbmkey(conn.proxy.username, 'usernames')
+        mapkey = self.key(conn.proxy.username, 'usernames')
         if packet.message.startswith('!skin '):
             target = packet.message[len('!skin '):]
             if ' ' in target or len(target) > 16:
                 return self.command_error(
                     conn.proxy, '!skin: Not accepting this username')
             if target == conn.proxy.username:
-                try:
-                    del self.dbm[mapkey]
-                except KeyError:
-                    pass
+                conn.proxy.redis.delete(mapkey)
             else:
-                self.dbm[mapkey] = target.encode('utf-8')
+                conn.proxy.redis.set(mapkey, target.encode('utf-8'))
 
             def async_load_skin():
                 self.command_status(
                     conn.proxy, '!skin: Loading skin for %s' % target)
-                skinkey = self.dbmkey(conn.proxy.username)
-                self.dbm[skinkey] = json.dumps(load_skin(target))
+                skinkey = self.key(conn.proxy.username)
+                conn.proxy.redis.set(skinkey, json.dumps(load_skin(target)))
                 self.command_success(
                     conn.proxy, '!skin: Skin has been set to %s' % target)
 

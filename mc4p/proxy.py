@@ -13,6 +13,7 @@ from __future__ import absolute_import, unicode_literals
 
 import importlib
 import logging
+from multiprocessing.managers import BaseManager
 
 from mc4p import network, rcon
 
@@ -31,17 +32,29 @@ class ProxyServer(network.Server):
         super(ProxyServer, self).__init__(addr, ProxyClientHandler)
         self.remote_addr = remote_addr
         self.plugins = plugins
-        self.rcon = rcon
+        self.manager = type(str('MCManager'), (BaseManager,), {})
+
+        if rcon:
+            self.manager.register(str('rcon'), lambda: rcon)
+        else:
+            self.rcon = rcon
 
         for plugin in self.plugins:
             plugin.on_enable(self)
 
     def run(self):
         try:
+            self.manager = self.manager()
+            self.manager.start()
             super(ProxyServer, self).run()
         finally:
             for plugin in self.plugins:
                 plugin.on_disable(self)
+            self.manager.shutdown()
+
+    @property
+    def rcon(self):
+        return self.manager.rcon()
 
 
 class ProxyClientHandler(network.ClientHandler):

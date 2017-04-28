@@ -174,7 +174,6 @@ class Endpoint(threading.Thread):
             except Exception:
                 pass
 
-
             self.sock.close()
             self._handle_disconnect()
 
@@ -251,7 +250,7 @@ class ClientHandler(Endpoint):
         )
 
 
-class Server(socketserver.ThreadingTCPServer, object):
+class Server(socketserver.ForkingTCPServer, object):
     def __init__(self, addr, handler=ClientHandler):
         super(Server, self).__init__(addr, handler)
         self.logger = logging.getLogger("network.server")

@@ -25,6 +25,7 @@ setuptools.setup(
     install_requires=(
         "requests",
         "pycrypto",
+        "redis",
     ),
     extras_require={
         'performance': ("pycrypto",),

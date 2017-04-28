@@ -11,7 +11,7 @@
 
 from __future__ import absolute_import, unicode_literals
 
-import anydbm
+import redis
 
 from mc4p import protocol
 
@@ -71,15 +71,25 @@ class RequireUsernamePlugin(Plugin):
         pass
 
 
-class DBMPlugin(Plugin):
-    def on_enable(self, server):
-        if not hasattr(self, 'dbm') or self.dbm is None:
-            self.dbm = anydbm.open('dbm', 'c')
+class RedisPlugin(Plugin):
+    def on_connect(self, proxy):
+        if not hasattr(proxy, 'redis'):
+            # TODO: implement plugin dependency and allow custom params
+            proxy.redis = redis.StrictRedis(host='localhost', port=6379, db=0)
 
-    def on_disable(self, server):
-        if self.dbm is not None:
-            self.dbm.close()
-            self.dbm = None
+    def on_disconnect(self, proxy):
+        if proxy.redis is not None:
+            proxy.redis = None
+
+
+class RconPlugin(Plugin):
+    def on_connect(self, proxy):
+        if proxy.rcon is None:
+            raise RuntimeError('Rcon required for plugin {}'.format(
+                self.__class__.__name__))
+
+    def execute_rcon(self, proxy, cmd):
+        return proxy.rcon.execute(cmd)
 
 
 class CommandPlugin(Plugin):
@@ -103,14 +113,3 @@ class CommandPlugin(Plugin):
             position=1
         ))
         return True
-
-
-class RconPlugin(Plugin):
-    def on_enable(self, server):
-        if server.rcon is None:
-            raise RuntimeError('Rcon required for plugin {}'.format(
-                self.__class__.__name__))
-        server.rcon.reconnect()
-
-    def execute_rcon(self, proxy, cmd):
-        return proxy.rcon.execute(cmd)
