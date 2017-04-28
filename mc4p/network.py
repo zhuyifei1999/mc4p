@@ -207,8 +207,7 @@ class Endpoint(threading.Thread):
                 break
 
     def recv(self):
-        while self.input_stream.bytes_avail and \
-                select.select([self.sock], [], [], 0)[0]:
+        while True:
             read_bytes = self.input_stream.recv_from(self.sock)
             if not read_bytes:
                 raise EOFError()
@@ -222,6 +221,8 @@ class Endpoint(threading.Thread):
                         'Exception occured while handling packet %s' % packet)
                     if not self.handle_packet_error(e):
                         raise
+            if not select.select([self.sock], [], [], 0)[0]:
+                break
 
     def flush(self):
         self.output_stream.flush(self.sock)
