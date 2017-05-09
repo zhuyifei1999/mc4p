@@ -35,9 +35,10 @@ class ProxyServer(network.Server):
         self.manager = type(str('MCManager'), (BaseManager,), {})
 
         if rcon:
-            self.manager.register(str('rcon'), lambda: rcon)
+            self.has_rcon = True
+            self.manager.register(str('rcon'), lambda: self._rcon)
         else:
-            self.rcon = rcon
+            self.has_rcon = False
 
         for plugin in self.plugins:
             plugin.on_enable(self)
@@ -54,7 +55,8 @@ class ProxyServer(network.Server):
 
     @property
     def rcon(self):
-        return self.manager.rcon()
+        if self.has_rcon:
+            return self.manager.rcon()
 
 
 class ProxyClientHandler(network.ClientHandler):
@@ -135,6 +137,9 @@ if __name__ == "__main__":
     parser.add_argument('remote_port',
                         help='port the proxy server should connect to',
                         type=int)
+    parser.add_argument('--remote_host',
+                        help='host the proxy server should connect to',
+                        default='localhost')
     parser.add_argument('--rcon',
                         help='Rcon connection to the server',
                         nargs=2,
@@ -163,11 +168,11 @@ if __name__ == "__main__":
 
     plugins = []
 
-    for plugin in args.plugin:
+    for plugin in args.plugin or []:
         pname, pargs = plugin[0], plugin[1:]
         module = importlib.import_module('mc4p.plugins.%s' % pname)
         plugins.append(module.load_plugin(*pargs))
 
     server = ProxyServer(
-        ('', args.port), ('localhost', args.remote_port), plugins, server_rcon)
+        ('', args.port), (args.remote_host, args.remote_port), plugins, server_rcon)
     server.run()
